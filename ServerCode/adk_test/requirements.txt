@@ -1,0 +1,12 @@
+google-adk 
+google-cloud-storage 
+google-genai 
+websockets 
+httpx 
+uvicorn 
+mcp 
+aiohttp 
+pyaudio 
+keyboard 
+a2a-sdk 
+firebase-admin

@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(adb devices *)",
+      "Bash(adb -s ZA222RQLNC install -r \"D:\\\\Projector\\\\AiProjectorRemote\\\\app\\\\build\\\\outputs\\\\apk\\\\debug\\\\app-debug.apk\")",
+      "Bash(adb -s ZA222RQLNC shell am force-stop com.projector.airemote)",
+      "Bash(adb -s ZA222RQLNC shell am start -n com.projector.airemote/.MainActivity)",
+      "Bash(./gradlew.bat :app:compileDebugKotlin -q)",
+      "Bash(adb -s ZA222RQLNC install -r \"D:/Projector/AiProjectorRemote/app/build/outputs/apk/debug/app-debug.apk\")",
+      "Bash(adb -s ZA222RQLNC logcat -c)"
+    ]
+  }
+}

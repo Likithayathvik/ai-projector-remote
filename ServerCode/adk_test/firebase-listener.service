@@ -1,0 +1,42 @@
+[Unit]
+Description=Projector Voice Agent Firebase Listener (lightweight, always-on)
+After=network.target
+
+[Service]
+Type=simple
+User=sathya_priya
+WorkingDirectory=/home/sathya_priya/projector-server/adk_test
+Environment=FIREBASE_DB_URL=https://REPLACE-WITH-YOUR-PROJECT-default-rtdb.firebaseio.com
+ExecStart=/home/sathya_priya/voice-agent/venv/bin/python3 firebase_listener.py
+Restart=always
+RestartSec=5
+StandardOutput=append:/home/sathya_priya/firebase_listener.log
+StandardError=append:/home/sathya_priya/firebase_listener.log
+
+[Install]
+WantedBy=multi-user.target
+
+# ── Setup ──────────────────────────────────────────────────────────────
+# 1. Complete the Firebase project setup described in the README section
+#    at the bottom of firebase_listener.py (create project, enable
+#    Realtime Database, download serviceAccountKey.json into adk_test/,
+#    get the Database URL).
+# 2. Edit FIREBASE_DB_URL above to your actual Realtime Database URL.
+# 3. Copy this file into place and enable it:
+#      sudo cp firebase-listener.service /etc/systemd/system/firebase-listener.service
+#      sudo systemctl daemon-reload
+#      sudo systemctl enable firebase-listener
+#      sudo systemctl start firebase-listener
+# 4. Check it's up:
+#      sudo systemctl status firebase-listener
+#      tail -f ~/firebase_listener.log
+#
+# This listener stays running 24/7 (cheap — it's just an open Firebase
+# stream, no Gemini calls). It starts/stops the actual voice_server.py
+# on the VM in response to the app's first query and app-close signals,
+# so you no longer need to SSH in manually to start the voice agent.
+#
+# NOTE: this replaces the earlier HTTP-based launcher_server.py — that
+# approach is no longer used. If you previously set up launcher.service,
+# disable it to avoid running two listeners:
+#   sudo systemctl disable --now launcher

@@ -1,0 +1,30 @@
+# ── Secrets — NEVER commit these ────────────────────────────────────────
+ServerCode/adk_test/serviceAccountKey.json
+ServerCode/adk_test/credentials.json
+ServerCode/adk_test/swiggy_client_id.json
+ServerCode/adk_test/swiggy_token.json
+**/.gemini_env
+**/google-services.json
+*.pem
+*.key
+
+# ── Android / Gradle ─────────────────────────────────────────────────────
+App/app/build/
+App/.gradle/
+App/local.properties
+App/.idea/
+App/**/*.iml
+App/captures/
+App/**/.cxx/
+App/**/*.apk
+App/**/*.aab
+
+# ── Python ────────────────────────────────────────────────────────────────
+ServerCode/**/__pycache__/
+ServerCode/**/*.pyc
+ServerCode/venv/
+ServerCode/**/*.log
+
+# ── OS junk ──────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
