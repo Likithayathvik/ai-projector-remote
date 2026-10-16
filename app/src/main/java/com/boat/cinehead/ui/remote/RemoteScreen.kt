@@ -61,6 +61,10 @@ import com.boat.cinehead.BuildConfig
 import com.boat.cinehead.net.ConnectionState
 import com.boat.cinehead.net.FocusedTextField
 import com.boat.cinehead.ui.theme.RemoteBlack
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.saveable.rememberSaveable
+import com.boat.cinehead.ui.equalizer.EqualizerScreen
+import com.boat.cinehead.ui.equalizer.EqualizerViewModel
 
 /** Placeholder field the shared [KeyboardModeScreen] renders for the timer-driven
  *  [KeyboardMode.SearchQuery] flow (YouTube TV), which has no real focused field on the
@@ -71,8 +75,10 @@ private val SEARCH_QUERY_FIELD = FocusedTextField(packageName = "", isPassword =
 @Composable
 fun RemoteScreen(
     viewModel: RemoteViewModel,
+    equalizerViewModel: EqualizerViewModel,
     onDisconnected: () -> Unit
 ) {
+    var tab by rememberSaveable { mutableStateOf(MainTab.Remote) }
     val context = LocalContext.current
     val connectionState by viewModel.connectionState.collectAsState()
     val chatMessages by viewModel.chatMessages.collectAsState()
@@ -87,10 +93,6 @@ fun RemoteScreen(
     // (no agent/server connection concept anymore — commands route on-device)
     val keyboardMode by viewModel.keyboardMode.collectAsState()
     val isSendingText by viewModel.isSendingText.collectAsState()
-    val keystoneLogVisible by viewModel.keystoneLogVisible.collectAsState()
-    val keystoneQuad by viewModel.keystoneQuad.collectAsState()
-    val keystoneLoading by viewModel.keystoneLoading.collectAsState()
-    val keystoneSupported by viewModel.keystoneSupported.collectAsState()
 
     var showSettings by remember { mutableStateOf(false) }
     var micError by remember { mutableStateOf<String?>(null) }
@@ -108,6 +110,11 @@ fun RemoteScreen(
         if (keyboardMode !is KeyboardMode.FieldFocused) dismissedTextField = null
     }
 
+    // Pressing Search is an explicit "I want to type" - undo any earlier Back on a field that
+    // is still focused on the projector, or Keyboard Mode would never come back for it.
+    val searchRequests by viewModel.searchRequests.collectAsState()
+    LaunchedEffect(searchRequests) { dismissedTextField = null }
+
     LaunchedEffect(connectionState) {
         if (connectionState is ConnectionState.Disconnected || connectionState is ConnectionState.Lost) {
             onDisconnected()
@@ -122,13 +129,18 @@ fun RemoteScreen(
     }
 
     var micListening by remember { mutableStateOf(false) }
+    var liveTranscript by remember { mutableStateOf("") }
     val onSpeechResult = rememberUpdatedState<(String) -> Unit> { text -> viewModel.sendChat(text) }
     val speechToText = remember {
         SpeechToText(
             context = context,
             onResult = { onSpeechResult.value(it) },
             onError = { micError = it },
-            onListeningChanged = { micListening = it }
+            onListeningChanged = {
+                micListening = it
+                liveTranscript = ""
+            },
+            onPartial = { liveTranscript = it }
         )
     }
     val micPermissionLauncher = rememberLauncherForActivityResult(
@@ -186,26 +198,33 @@ fun RemoteScreen(
             }
         },
         bottomBar = {
-            ChatInputCard(
-                isSending = isSending,
-                onSend = { viewModel.sendChat(it) },
-                onMicClick = {
-                    val granted = ContextCompat.checkSelfPermission(
-                        context, Manifest.permission.RECORD_AUDIO
-                    ) == PackageManager.PERMISSION_GRANTED
-                    if (granted) speechToText.toggle()
-                    else micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                },
-                isListening = micListening,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .navigationBarsPadding()
-                    .imePadding()
-                    .padding(horizontal = 16.dp, vertical = 12.dp)
-            )
+            Column(modifier = Modifier.fillMaxWidth().imePadding()) {
+                // The chat bar belongs to the Remote tab only.
+                if (tab == MainTab.Remote) {
+                    ChatInputCard(
+                        isSending = isSending,
+                        onSend = { viewModel.sendChat(it) },
+                        onMicClick = {
+                            val granted = ContextCompat.checkSelfPermission(
+                                context, Manifest.permission.RECORD_AUDIO
+                            ) == PackageManager.PERMISSION_GRANTED
+                            if (granted) speechToText.toggle()
+                            else micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                        },
+                        isListening = micListening,
+                        liveTranscript = liveTranscript,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 12.dp)
+                    )
+                }
+                MainTabBar(selected = tab, onSelect = { tab = it }, modifier = Modifier.navigationBarsPadding())
+            }
         }
     ) { padding ->
-        Box(modifier = Modifier.fillMaxWidth().padding(padding)) {
+        when (tab) {
+            MainTab.Equalizer -> Box(Modifier.fillMaxSize().padding(padding)) { EqualizerScreen(equalizerViewModel) }
+            MainTab.Remote -> Box(modifier = Modifier.fillMaxWidth().padding(padding)) {
             LazyColumn(
                 modifier = Modifier.fillMaxWidth(),
                 contentPadding = PaddingValues(bottom = 16.dp)
@@ -213,11 +232,6 @@ fun RemoteScreen(
                 item { RemoteControlPad(volume, isMuted, usbSupported, menuSupported) { tool, label -> viewModel.pressButton(tool, label) } }
                 item { PlayControlRow { tool, label -> viewModel.pressButton(tool, label) } }
                 item { QuickLaunchRow { tool, label -> viewModel.pressButton(tool, label) } }
-                if (keystoneSupported) {
-                    item {
-                        KeystoneCorrectionButton(active = keystoneLogVisible) { viewModel.toggleKeystoneLog() }
-                    }
-                }
                 if (chatMessages.isNotEmpty()) {
                     item {
                         Text(
@@ -238,14 +252,7 @@ fun RemoteScreen(
                     }
                 }
             }
-            if (keystoneLogVisible) {
-                KeystonePanel(
-                    quad = keystoneQuad,
-                    loading = keystoneLoading,
-                    onClose = { viewModel.toggleKeystoneLog() },
-                    modifier = Modifier.align(Alignment.BottomCenter)
-                )
-            }
+        }
         }
     }
 

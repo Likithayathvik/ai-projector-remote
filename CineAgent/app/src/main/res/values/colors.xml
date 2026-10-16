@@ -1,0 +1,11 @@
+<resources>
+    <color name="cine_primary">#1565C0</color>
+    <color name="cine_primary_dark">#0D47A1</color>
+    <color name="cine_accent">#FF8F00</color>
+    <color name="cine_background">#0E1116</color>
+    <color name="cine_surface">#1B1F27</color>
+    <color name="cine_on_surface">#ECEFF4</color>
+    <color name="cine_muted">#8A93A3</color>
+    <color name="cine_status_ok">#2E7D32</color>
+    <color name="cine_status_off">#C62828</color>
+</resources>

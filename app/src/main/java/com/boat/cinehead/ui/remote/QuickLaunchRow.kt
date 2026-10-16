@@ -13,7 +13,6 @@ import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.SmartDisplay
-import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -61,37 +60,6 @@ fun QuickLaunchRow(onLaunch: (toolName: String, label: String) -> Unit) {
                         Text(app.label, color = Color.White, style = MaterialTheme.typography.labelSmall)
                     }
                 }
-            }
-        }
-    }
-}
-
-/** Sits right below Quick Launch. Toggles the live [KeystonePanel] overlay - see
- *  RemoteViewModel.toggleKeystoneLog() and RemoteScreen for how the panel stays over the
- *  content without blocking the D-pad above it. */
-@Composable
-fun KeystoneCorrectionButton(active: Boolean, onClick: () -> Unit) {
-    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
-        Surface(
-            color = if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
-            shape = RoundedCornerShape(16.dp),
-            modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier.fillMaxWidth().padding(16.dp)
-            ) {
-                Icon(
-                    Icons.Filled.Tune,
-                    contentDescription = null,
-                    tint = if (active) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    if (active) "Auto Keystone Correction (live)" else "Auto Keystone Correction",
-                    color = if (active) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.titleMedium
-                )
             }
         }
     }

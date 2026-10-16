@@ -18,6 +18,7 @@ import com.boat.cinehead.net.CineAgentDiscovery
 import com.boat.cinehead.net.ConnectionState
 import com.boat.cinehead.ui.discovery.DiscoveryScreen
 import com.boat.cinehead.ui.discovery.DiscoveryViewModel
+import com.boat.cinehead.ui.equalizer.EqualizerViewModel
 import com.boat.cinehead.ui.remote.RemoteScreen
 import com.boat.cinehead.ui.remote.RemoteViewModel
 import com.boat.cinehead.ui.theme.AiProjectorRemoteTheme
@@ -61,7 +62,12 @@ class MainActivity : ComponentActivity() {
                                     }
                                 }
                             )
-                            RemoteScreen(viewModel) {
+                            val equalizerViewModel: EqualizerViewModel = viewModel(
+                                factory = viewModelFactory {
+                                    initializer { EqualizerViewModel(app.connectionManager) }
+                                }
+                            )
+                            RemoteScreen(viewModel, equalizerViewModel) {
                                 navController.navigate("discovery") {
                                     popUpTo("remote") { inclusive = true }
                                 }

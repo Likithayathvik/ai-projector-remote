@@ -1,0 +1,8 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <style name="Theme.CineAgent" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/cine_primary</item>
+        <item name="colorPrimaryDark">@color/cine_primary_dark</item>
+        <item name="colorAccent">@color/cine_accent</item>
+        <item name="android:windowBackground">@color/cine_background</item>
+    </style>
+</resources>

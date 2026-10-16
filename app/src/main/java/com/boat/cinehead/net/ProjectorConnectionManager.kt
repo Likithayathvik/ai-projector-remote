@@ -11,7 +11,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -50,6 +52,26 @@ class ProjectorConnectionManager(
      *  is shown/hidden purely by observing this, no separate open/close call needed. */
     private val _focusedTextField = MutableStateFlow<FocusedTextField?>(null)
     val focusedTextField: StateFlow<FocusedTextField?> = _focusedTextField
+
+    /** CineAgent's DOLBY_CHANGED push: Dolby Audio was switched on the projector (e.g. from its
+     *  own Sound menu with the remote). Carries the new on/off value. */
+    private val _dolbyChanged = MutableSharedFlow<Boolean>(extraBufferCapacity = 1)
+    val dolbyChanged: SharedFlow<Boolean> = _dolbyChanged
+
+    /** CineAgent's EQUALIZER_CHANGED push (WhaleOS): the sound mode or a band level was changed on
+     *  the projector itself (its Sound menu, via the remote). */
+    private val _equalizerChanged = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val equalizerChanged: SharedFlow<Unit> = _equalizerChanged
+
+    /** Which equalizer the connected projector has, from GET_DEVICE_INFO's `equalizer` on every
+     *  (re)connect: [EQUALIZER_WHALEOS] (Whale TV: its own sound modes) or [EQUALIZER_NXP] (F1
+     *  family and the rest, also when an older CineAgent build omits the field). */
+    private val _equalizerType = MutableStateFlow(EQUALIZER_NXP)
+    val equalizerType: StateFlow<String> = _equalizerType
+
+    fun setEqualizerType(type: String) {
+        _equalizerType.value = type
+    }
 
     var executor: RemoteExecutor? = null
         private set
@@ -152,6 +174,12 @@ class ProjectorConnectionManager(
             "TEXT_FIELD_BLURRED" -> {
                 _focusedTextField.value = null
             }
+            "DOLBY_CHANGED" -> {
+                _dolbyChanged.tryEmit(event.optBoolean("enabled"))
+            }
+            "EQUALIZER_CHANGED" -> {
+                _equalizerChanged.tryEmit(Unit)
+            }
         }
     }
 
@@ -211,6 +239,8 @@ class ProjectorConnectionManager(
     }
 
     companion object {
+        const val EQUALIZER_NXP = "nxp"
+        const val EQUALIZER_WHALEOS = "whaleos"
         private const val TAG = "ProjectorConnectionManager"
         /** PING cadence. Deliberately faster than spec's 10s so a few dropped PINGs on a lossy
          *  link don't cross CineAgent's warn threshold, and so recovery is quick. */

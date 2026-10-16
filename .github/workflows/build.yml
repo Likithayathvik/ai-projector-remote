@@ -1,0 +1,80 @@
+# Builds both apps on every push / pull request and keeps the APKs as run artifacts:
+#   boAtCineHead  - the phone app (repo root)
+#   CineAgent     - the projector agent (CineAgent/)
+# Pushing a tag like v1.4 also publishes a GitHub Release with both APKs attached.
+#
+# The APKs are debug builds signed with this runner's debug key, so they cannot update an app
+# installed from a build made on another PC (Android refuses a different signature): uninstall
+# first, or use install-projector.bat, which offers to.
+name: Build APKs
+
+on:
+  push:
+    branches: [main, "boatcinehead-*"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build ${{ matrix.app }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - app: boAtCineHead
+            dir: .
+          - app: CineAgent
+            dir: CineAgent
+    defaults:
+      run:
+        working-directory: ${{ matrix.dir }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Assemble debug APK
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:assembleDebug --no-daemon --stacktrace
+
+      - name: Name the APK by version
+        id: apk
+        run: |
+          version=$(grep -o '"versionName": *"[^"]*"' app/build/outputs/apk/debug/output-metadata.json | sed 's/.*"\([^"]*\)"$/\1/')
+          name="${{ matrix.app }}-${version}-debug.apk"
+          mkdir -p "$GITHUB_WORKSPACE/out"
+          cp app/build/outputs/apk/debug/app-debug.apk "$GITHUB_WORKSPACE/out/$name"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "Built $name"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.apk.outputs.name }}
+          path: out/${{ steps.apk.outputs.name }}
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: apks
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: apks/*.apk
+          generate_release_notes: true

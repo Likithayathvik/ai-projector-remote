@@ -123,7 +123,10 @@ class ToolDispatcher(
         // Verified live against a real projector (SigmaStar pioneer5, 2026-07-09): its Netflix
         // is the mobile build, not the Android TV one AppSettingsStore defaults to.
         private val NETFLIX_FALLBACKS = listOf("com.netflix.mediaclient", "com.netflix.ninja")
-        private val YOUTUBE_FALLBACKS = listOf("com.google.android.youtube.tv", "com.google.android.youtube")
+        // Whale TV (HOTACK SMART2KPJT, 2026-10-15) ships its own rebranded YouTube TV build.
+        private val YOUTUBE_FALLBACKS = listOf(
+            "com.google.android.youtube.tv", "com.google.android.youtube", "com.WhaleTV.whaleos.youtube.tv"
+        )
         // Not verified against real hardware (neither was installed on the test unit) - best
         // effort based on known common package ids for these apps.
         private val PRIME_VIDEO_FALLBACKS = listOf("com.amazon.amazonvideo.livingroom", "com.amazon.avod.thirdpartyclient")

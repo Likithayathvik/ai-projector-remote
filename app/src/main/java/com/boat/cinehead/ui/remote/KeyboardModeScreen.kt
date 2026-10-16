@@ -30,6 +30,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -37,8 +38,11 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
@@ -63,17 +67,48 @@ fun KeyboardModeScreen(
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
-    var text by remember(field) { mutableStateOf(field.text) }
+    // Pre-filled from the projector's field only when a different field is focused: after a
+    // Send the projector re-reports the same field holding the sent text, which must not land
+    // back in this box (it is cleared on Send, ready for the next query).
+    var text by remember(field.packageName, field.isPassword) { mutableStateOf(field.text) }
+    val send: (String) -> Unit = { value ->
+        onSend(value)
+        text = ""
+    }
     var micError by remember { mutableStateOf<String?>(null) }
     var micListening by remember { mutableStateOf(false) }
+    var liveTranscript by remember { mutableStateOf("") }
+    val focusRequester = remember { FocusRequester() }
+    val keyboardController = LocalSoftwareKeyboardController.current
 
-    val onSpeechResult = rememberUpdatedState<(String) -> Unit> { result -> text = result }
+    // The whole point of this screen is typing, so focus the field and raise the phone's
+    // keyboard as soon as it appears (and again for each newly focused projector field)
+    // instead of waiting for the user to tap into it.
+    LaunchedEffect(field) {
+        focusRequester.requestFocus()
+        keyboardController?.show()
+    }
+
+    // Starting/stopping the mic or a send finishing can pull focus off the field; put it back
+    // and keep the phone keyboard up the whole time the user is on this screen.
+    LaunchedEffect(micListening, isSending) {
+        focusRequester.requestFocus()
+        keyboardController?.show()
+    }
+
+    // Voice input ends on its own once the user pauses, and goes straight to the projector -
+    // no extra mic tap or Send needed.
+    val onSpeechResult = rememberUpdatedState<(String) -> Unit> { result -> send(result) }
     val speechToText = remember {
         SpeechToText(
             context = context,
             onResult = { onSpeechResult.value(it) },
             onError = { micError = it },
-            onListeningChanged = { micListening = it }
+            onListeningChanged = {
+                micListening = it
+                liveTranscript = ""
+            },
+            onPartial = { liveTranscript = it }
         )
     }
     val micPermissionLauncher = rememberLauncherForActivityResult(
@@ -103,15 +138,25 @@ fun KeyboardModeScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             OutlinedTextField(
-                value = text,
-                onValueChange = { text = it },
+                // While the mic is capturing, show what it's heard so far; the final transcript
+                // lands in [text] once capture stops.
+                value = if (micListening) liveTranscript else text,
+                onValueChange = { if (!micListening) text = it },
+                placeholder = if (micListening) {
+                    { Text("Listening…") }
+                } else null,
+                // Not readOnly while listening - a readOnly field drops the phone keyboard, and
+                // it should stay up through voice input and sends alike. Typing during capture
+                // is simply ignored by onValueChange above.
                 singleLine = true,
                 visualTransformation = if (field.isPassword) {
                     PasswordVisualTransformation()
                 } else {
                     VisualTransformation.None
                 },
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .focusRequester(focusRequester)
             )
 
             Row(
@@ -139,7 +184,7 @@ fun KeyboardModeScreen(
                 if (isSending) {
                     CircularProgressIndicator(modifier = Modifier.padding(8.dp))
                 } else {
-                    IconButton(onClick = { if (text.isNotBlank()) onSend(text) }) {
+                    IconButton(onClick = { if (text.isNotBlank()) send(text) }) {
                         Icon(Icons.Filled.Send, contentDescription = "Send")
                     }
                 }

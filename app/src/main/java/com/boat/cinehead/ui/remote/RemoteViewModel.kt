@@ -23,19 +23,6 @@ import kotlinx.coroutines.launch
 
 data class ChatMessage(val text: String, val isUser: Boolean, val isError: Boolean = false)
 
-/** One keystone corner reading. Values are pixels - integers from the MediaTek trapezoid HAL,
- *  fractional from persist.vendor.hwc.keystone, so kept as Float. */
-data class KeystonePoint(val x: Float, val y: Float)
-
-/** The four keystone corners, laid out as the panel draws them:
- *  [topLeft] = (x1,y1), [topRight] = (x2,y2), [bottomLeft] = (x3,y3), [bottomRight] = (x4,y4). */
-data class KeystoneQuad(
-    val topLeft: KeystonePoint,
-    val topRight: KeystonePoint,
-    val bottomLeft: KeystonePoint,
-    val bottomRight: KeystonePoint,
-)
-
 /** What Keyboard Mode should currently show, or null to hide it.
  *  - [FieldFocused] is driven by CineAgent's TEXT_FIELD_FOCUSED push - a real editable field
  *    is focused on the projector (login / password / a search box that exposes one). "Send"
@@ -78,23 +65,9 @@ private const val DEVICE_CAPABILITIES_RETRY_INTERVAL_MS = 700L
 
 // After the Search button opens YouTube TV's (empty) search screen, how long to let the
 // projector render it before the phone brings up Keyboard Mode for the query. Matches the
-// flow confirmed live: fire OPEN_SEARCH -> ~3s -> Keyboard Mode -> type -> Send re-fires
+// flow confirmed live: fire OPEN_SEARCH -> ~2s -> Keyboard Mode -> type -> Send re-fires
 // OPEN_SEARCH{query}.
-private const val SEARCH_KEYBOARD_OPEN_DELAY_MS = 3_000L
-
-// Auto Keystone Correction panel cadence while it's open. One cycle is: show the current
-// four-corner quad for KEYSTONE_DISPLAY_MS, then a loader for KEYSTONE_LOADER_MS while the
-// next GET_KEYSTONE round-trips, then repeat - the quad is always re-shown afterwards whether
-// or not the value moved. GET_KEYSTONE on CineAgent reads persist.vendor.hwc.keystone, or
-// falls back to the MediaTek TrapezoidHal logcat line on F1-class firmware where that
-// property is SELinux-blocked.
-private const val KEYSTONE_DISPLAY_MS = 2_000L
-private const val KEYSTONE_LOADER_MS = 3_000L
-
-/** Reference projection frame the keystone corner coordinates are expressed in - the panel
- *  maps the quad from this space into its drawing area. */
-internal const val KEYSTONE_REF_W = 1920f
-internal const val KEYSTONE_REF_H = 1080f
+private const val SEARCH_KEYBOARD_OPEN_DELAY_MS = 2_000L
 
 /** The only tool-calling actions the voice/chat agent is allowed to trigger.
  *  Anything else gets the "not supported" popup instead of being dispatched. */
@@ -102,7 +75,7 @@ private val SUPPORTED_AGENT_TOOLS = setOf(
     "set_volume", "open_settings", "open_wifi_settings", "open_bluetooth_settings", "search"
 )
 
-/** Maps CommandRouter's canonical platform names (from a SEARCH result) to the existing
+/** Maps CommandRouter's canonical platform/app names (SEARCH and OPEN_APP results) to the existing
  *  launch_X tools ToolDispatcher already supports. */
 private val PLATFORM_LAUNCH_TOOLS = mapOf(
     "YOUTUBE" to "launch_youtube",
@@ -128,7 +101,7 @@ class RemoteViewModel(
 
     /** Drives the timer-based (non-FieldFocused) Keyboard Mode: set by [runSearch] after
      *  CineAgent opens an in-app search screen, so the user can type from the phone instead
-     *  of the projector's on-screen keyboard. Cleared on Send, on Back, or on disconnect. */
+     *  of the projector's on-screen keyboard. Cleared only on Back or on disconnect - sending a search keeps it open. */
     private val _searchKeyboardVisible = MutableStateFlow(false)
 
     /** From the last OPEN_SEARCH response: true when the app exposes no typeable field and
@@ -148,6 +121,13 @@ class RemoteViewModel(
                 else -> null
             }
         }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    /** Bumped every time the user presses Search and the projector opens a search screen.
+     *  RemoteScreen clears its "user backed out of this field" latch on each bump, so pressing
+     *  Search always brings Keyboard Mode back - even when the projector's search box never
+     *  lost focus in between (Hotstar keeps its search field focused on the search page). */
+    private val _searchRequests = MutableStateFlow(0)
+    val searchRequests: StateFlow<Int> = _searchRequests
 
     private val _isSendingText = MutableStateFlow(false)
     val isSendingText: StateFlow<Boolean> = _isSendingText
@@ -192,34 +172,8 @@ class RemoteViewModel(
     private val _menuSupported = MutableStateFlow(true)
     val menuSupported: StateFlow<Boolean> = _menuSupported
 
-    /** Auto Keystone Correction only works where CineAgent can actually read the projector's
-     *  keystone geometry - the E1 (via persist.vendor.hwc.keystone). On F1 / F1 Pro that
-     *  property is SELinux-blocked and the TrapezoidHal log is unreadable to a sideloaded
-     *  CineAgent, so GET_KEYSTONE always fails there and the button is hidden. Derived from
-     *  GET_DEVICE_INFO's `model` (see [refreshDeviceCapabilities]); defaults to true. */
-    private val _keystoneSupported = MutableStateFlow(true)
-    val keystoneSupported: StateFlow<Boolean> = _keystoneSupported
-
     private val _statusMessage = MutableStateFlow<String?>(null)
     val statusMessage: StateFlow<String?> = _statusMessage
-
-    /** Auto Keystone Correction panel: true while the overlay is open and [keystonePollJob]
-     *  is running its display/loader cycle. RemoteScreen renders the panel over the D-pad area
-     *  only while this is true, so the D-pad itself stays visible and clickable underneath -
-     *  adjusting a corner on the projector and watching this panel update is the whole point. */
-    private val _keystoneLogVisible = MutableStateFlow(false)
-    val keystoneLogVisible: StateFlow<Boolean> = _keystoneLogVisible
-
-    /** The current four-corner quad, replaced after every GET_KEYSTONE whether or not it moved.
-     *  Null until the first successful read after the panel opens. */
-    private val _keystoneQuad = MutableStateFlow<KeystoneQuad?>(null)
-    val keystoneQuad: StateFlow<KeystoneQuad?> = _keystoneQuad
-
-    /** True during the loader phase of each cycle (while the next GET_KEYSTONE is in flight). */
-    private val _keystoneLoading = MutableStateFlow(false)
-    val keystoneLoading: StateFlow<Boolean> = _keystoneLoading
-
-    private var keystonePollJob: Job? = null
 
     /**
      * Popup shown only when the agent tries to call a tool outside the four
@@ -355,6 +309,9 @@ class RemoteViewModel(
             return
         }
         lastSearchAcceptsQuery = response?.optBoolean("acceptsQuery", false) == true
+        // If the projector already has a search field focused (e.g. already on Hotstar's search
+        // page), this re-shows Keyboard Mode for it right away.
+        _searchRequests.value++
 
         // CineAgent opened *some* in-app search screen. Bring up Keyboard Mode from the phone
         // so the user can type here instead of on the projector's on-screen keyboard. Skip it
@@ -373,7 +330,7 @@ class RemoteViewModel(
      *  last OPEN_SEARCH flagged acceptsQuery (YouTube TV) it re-fires OPEN_SEARCH with the
      *  query, which CineAgent turns into a search_query= deep link. Otherwise (Hotstar, ...)
      *  it types straight into the focused field with SEND_TEXT, falling back to the deep-link
-     *  form if that's rejected. Then closes Keyboard Mode. */
+     *  form if that's rejected. Keyboard Mode stays open afterwards. */
     fun sendSearchQuery(text: String) {
         val query = text.trim()
         if (query.isBlank()) return
@@ -389,7 +346,8 @@ class RemoteViewModel(
                 _statusMessage.value = "Search failed: ${result?.message ?: "not connected"}"
             }
             _isSendingText.value = false
-            _searchKeyboardVisible.value = false
+            // Deliberately stays in Keyboard Mode so the user can refine or send another search
+            // (voice or typed) - it only closes via Back (cancelSearchKeyboard) or disconnect.
         }
     }
 
@@ -404,17 +362,7 @@ class RemoteViewModel(
         if (info != null) _volume.value = info
     }
 
-    /** F1 (AP0034 / "CineHead F1") and F1 Pro (AP0039) - the models where GET_KEYSTONE can't
-     *  work. Matches the board codes plus any "F1" in the reported model string. */
-    private fun isF1ClassModel(model: String): Boolean {
-        val m = model.trim().uppercase(java.util.Locale.US)
-        return m == "AP0034" || m == "AP0039" || m.contains("F1")
-    }
-
     private suspend fun refreshDeviceCapabilities() {
-        // Start each connect optimistic so a stale F1 result doesn't hide the button on the
-        // next projector; only an explicit F1-class `model` flips it back off below.
-        _keystoneSupported.value = true
         repeat(DEVICE_CAPABILITIES_MAX_ATTEMPTS) { attempt ->
             val executor = connectionManager.executor
             if (executor == null) {
@@ -426,13 +374,12 @@ class RemoteViewModel(
             if (response != null && response.optString("status") == "SUCCESS") {
                 val usbSupported = response.optBoolean("usbSupported", true)
                 val menuSupported = response.optBoolean("menuSupported", true)
-                val model = response.optString("model")
-                val keystoneSupported = !isF1ClassModel(model)
-                Log.d(TAG, "refreshDeviceCapabilities: usbSupported=$usbSupported (field present=${response.has("usbSupported")}), menuSupported=$menuSupported (field present=${response.has("menuSupported")}), model=$model keystoneSupported=$keystoneSupported")
+                Log.d(TAG, "refreshDeviceCapabilities: usbSupported=$usbSupported (field present=${response.has("usbSupported")}), menuSupported=$menuSupported (field present=${response.has("menuSupported")})")
                 _usbSupported.value = usbSupported
                 _menuSupported.value = menuSupported
-                _keystoneSupported.value = keystoneSupported
-                if (!keystoneSupported && _keystoneLogVisible.value) hideKeystoneLog()
+                connectionManager.setEqualizerType(
+                    response.optString("equalizer", ProjectorConnectionManager.EQUALIZER_NXP)
+                )
                 return
             }
             if (attempt < DEVICE_CAPABILITIES_MAX_ATTEMPTS - 1) {
@@ -487,6 +434,15 @@ class RemoteViewModel(
                     }
                     runTool("search", mapOf("query" to (result.query.orEmpty())))
                 }
+                6 -> {
+                    // e.g. "open netflix" - reuses the same launch_X tools as QuickLaunchRow.
+                    val launchTool = PLATFORM_LAUNCH_TOOLS[result.app]
+                    if (launchTool != null) {
+                        runTool(launchTool, emptyMap())
+                    } else {
+                        _actionPopup.value = "Tool is not supported and Please use remote for your action"
+                    }
+                }
                 else -> _actionPopup.value = "Tool is not supported and Please use remote for your action"
             }
 
@@ -510,91 +466,6 @@ class RemoteViewModel(
             }
             _isSendingText.value = false
         }
-    }
-
-    /** Quick Launch's Auto Keystone Correction button - opens or closes the live log panel. */
-    fun toggleKeystoneLog() {
-        if (_keystoneLogVisible.value) hideKeystoneLog() else showKeystoneLog()
-    }
-
-    private fun showKeystoneLog() {
-        _keystoneLogVisible.value = true
-        _keystoneQuad.value = null
-        _keystoneLoading.value = false
-        keystonePollJob?.cancel()
-        keystonePollJob = viewModelScope.launch {
-            while (true) {
-                // Loader phase: GET_KEYSTONE round-trips, loader is shown for at least
-                // KEYSTONE_LOADER_MS even if the reply comes back sooner.
-                _keystoneLoading.value = true
-                val startedAt = System.currentTimeMillis()
-                val response = connectionManager.executor?.query("GET_KEYSTONE")
-                val elapsed = System.currentTimeMillis() - startedAt
-                if (elapsed < KEYSTONE_LOADER_MS) delay(KEYSTONE_LOADER_MS - elapsed)
-                _keystoneLoading.value = false
-
-                // Replace the quad on every successful read, changed or not. A failed read
-                // leaves the previous quad on screen.
-                response
-                    ?.takeIf { it.optString("status") == "SUCCESS" }
-                    ?.let { parseKeystoneQuad(it) }
-                    ?.let { _keystoneQuad.value = it }
-
-                // Display phase: hold the quad before the next cycle.
-                delay(KEYSTONE_DISPLAY_MS)
-            }
-        }
-    }
-
-    /**
-     * Builds the four-corner [KeystoneQuad] from CineAgent's GET_KEYSTONE response, as ABSOLUTE
-     * coordinates in a [KEYSTONE_REF_W] x [KEYSTONE_REF_H] frame. This is the *electronic*
-     * keystone-correction geometry (the region the compositor warps the source into), not the
-     * shape on the wall - the wall also carries the projector's fixed physical throw angle,
-     * which isn't in this data.
-     *
-     * - `trapezoid` object (F1-class, from the MediaTek TrapezoidHal log): per-corner inward
-     *   pixel offsets - converted here to absolute frame corners.
-     * - `keystone` CSV (E1-class, from persist.vendor.hwc.keystone): 8 absolute numbers, but in
-     *   the display pipeline's BOTTOM-LEFT origin (y grows upward - confirmed live 2026-09-10 on
-     *   a CineHead E1: DPAD_UP in the keystone UI increases the stored y). Corner order in that
-     *   frame is BL, BR, TR, TL. Flipped to the panel's top-left screen space here.
-     * Returns null if neither is usable.
-     */
-    private fun parseKeystoneQuad(response: JSONObject): KeystoneQuad? {
-        response.optJSONObject("trapezoid")?.let { t ->
-            fun off(name: String): KeystonePoint? {
-                val p = t.optJSONObject(name) ?: return null
-                return KeystonePoint(p.optDouble("x").toFloat(), p.optDouble("y").toFloat())
-            }
-            val lt = off("leftTop"); val rt = off("rightTop")
-            val lb = off("leftBot"); val rb = off("rightBot")
-            if (lt != null && rt != null && lb != null && rb != null) {
-                return KeystoneQuad(
-                    topLeft = KeystonePoint(lt.x, lt.y),
-                    topRight = KeystonePoint(KEYSTONE_REF_W - rt.x, rt.y),
-                    bottomLeft = KeystonePoint(lb.x, KEYSTONE_REF_H - lb.y),
-                    bottomRight = KeystonePoint(KEYSTONE_REF_W - rb.x, KEYSTONE_REF_H - rb.y),
-                )
-            }
-        }
-        val n = response.optString("keystone").split(",").mapNotNull { it.trim().toFloatOrNull() }
-        if (n.size != 8) return null
-        // n is BL, BR, TR, TL in a bottom-left origin; flip y into top-left screen space.
-        fun flipY(y: Float) = KEYSTONE_REF_H - y
-        return KeystoneQuad(
-            bottomLeft = KeystonePoint(n[0], flipY(n[1])),
-            bottomRight = KeystonePoint(n[2], flipY(n[3])),
-            topRight = KeystonePoint(n[4], flipY(n[5])),
-            topLeft = KeystonePoint(n[6], flipY(n[7])),
-        )
-    }
-
-    private fun hideKeystoneLog() {
-        _keystoneLogVisible.value = false
-        _keystoneLoading.value = false
-        keystonePollJob?.cancel()
-        keystonePollJob = null
     }
 
     fun consumeStatusMessage() { _statusMessage.value = null }
@@ -623,12 +494,10 @@ class RemoteViewModel(
         connectionManager.disconnect()
         _isPoweringOff.value = false
         _searchKeyboardVisible.value = false
-        hideKeystoneLog()
     }
 
     override fun onCleared() {
         super.onCleared()
         voiceAgentClient?.disconnect()
-        keystonePollJob?.cancel()
     }
 }

@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/cine_background"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="24dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/app_name"
+            android:textColor="@color/cine_on_surface"
+            android:textSize="28sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/statusText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="@string/status_stopped"
+            android:textColor="@color/cine_status_off"
+            android:textSize="16sp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:background="@color/cine_surface"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <TextView
+                android:id="@+id/rowDeviceName"
+                style="@style/InfoRow"
+                android:text="@string/label_device_name" />
+
+            <TextView
+                android:id="@+id/rowIp"
+                style="@style/InfoRow"
+                android:text="@string/label_ip_address" />
+
+            <TextView
+                android:id="@+id/rowSerial"
+                style="@style/InfoRow"
+                android:text="@string/label_serial" />
+
+            <TextView
+                android:id="@+id/rowUdpPort"
+                style="@style/InfoRow"
+                android:text="@string/label_udp_port" />
+
+            <TextView
+                android:id="@+id/rowTcpPort"
+                style="@style/InfoRow"
+                android:text="@string/label_tcp_port" />
+
+            <TextView
+                android:id="@+id/rowClients"
+                style="@style/InfoRow"
+                android:text="@string/label_clients" />
+
+        </LinearLayout>
+
+        <Button
+            android:id="@+id/btnToggleService"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:text="@string/btn_start" />
+
+        <Button
+            android:id="@+id/btnUsageAccess"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="@string/btn_usage_access" />
+
+    </LinearLayout>
+</ScrollView>
