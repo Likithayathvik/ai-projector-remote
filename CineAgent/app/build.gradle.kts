@@ -10,8 +10,8 @@ android {
         applicationId = "com.boat.cineagent"
         minSdk = 26
         targetSdk = 36
-        versionCode = 8
-        versionName = "1.1.6"
+        versionCode = 14
+        versionName = "1.1.7"
 
         buildConfigField("int", "UDP_DISCOVERY_PORT", "50000")
         buildConfigField("int", "TCP_COMMAND_PORT", "50001")

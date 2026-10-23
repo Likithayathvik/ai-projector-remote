@@ -4,7 +4,9 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
@@ -19,6 +21,7 @@ class CineAgentService : Service() {
 
     companion object {
         private const val NOTIFICATION_ID = 1
+        private const val TV_INPUT_REBIND_DELAY_MS = 15_000L
 
         @Volatile
         var isRunning: Boolean = false
@@ -86,6 +89,13 @@ class CineAgentService : Service() {
         systemEventMonitor.start()
         // Off the main thread: it queries the TV agent's sound database.
         thread(name = "cineagent-audio-restore") { commandHandler.restoreAudioEffects() }
+        // After an app update the TV input auto-start hook is left unbound (see
+        // AutoStartTvInputService.rebindIfNotRunning). Delayed so that during a normal boot
+        // TvInputManagerService gets the chance to bind it on its own first.
+        Handler(Looper.getMainLooper()).postDelayed(
+            { AutoStartTvInputService.rebindIfNotRunning(this) },
+            TV_INPUT_REBIND_DELAY_MS
+        )
 
         deviceName = DeviceInfoProvider.deviceName(this)
         ipAddress = DeviceInfoProvider.localIpAddress() ?: ""

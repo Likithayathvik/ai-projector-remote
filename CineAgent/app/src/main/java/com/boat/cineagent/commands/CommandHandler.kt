@@ -454,7 +454,22 @@ class CommandHandler(private val context: Context) {
             Process.myUid(),
             context.packageName
         )
-        return mode == AppOpsManager.MODE_ALLOWED
+        return when (mode) {
+            // Explicitly allowed (Settings toggle, or `appops set GET_USAGE_STATS allow`).
+            AppOpsManager.MODE_ALLOWED -> true
+            // No explicit appop set. Android's UsageStatsService then falls back to the
+            // PACKAGE_USAGE_STATS permission, which the platform-signed build holds (granted by
+            // the signature). Under this fallback queryEvents()/queryUsageStats() return data
+            // normally, so treating MODE_DEFAULT + granted permission as "has access" is what
+            // lets GET_RUNNING_APP work without the installer's `appops set ... allow` step.
+            AppOpsManager.MODE_DEFAULT ->
+                context.checkPermission(
+                    android.Manifest.permission.PACKAGE_USAGE_STATS,
+                    Process.myPid(),
+                    Process.myUid()
+                ) == PackageManager.PERMISSION_GRANTED
+            else -> false
+        }
     }
 
     /** Most-recent MOVE_TO_FOREGROUND event in the last 10 minutes of usage-stats history -

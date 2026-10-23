@@ -1,17 +1,26 @@
 # Builds both apps on every push / pull request and keeps the APKs as run artifacts:
 #   boAtCineHead  - the phone app (repo root)
 #   CineAgent     - the projector agent (CineAgent/)
-# Pushing a tag like v1.4 also publishes a GitHub Release with both APKs attached.
+# Pushing a tag like v1.4 or cineagent-v1.1.7 also publishes a GitHub Release with the APKs attached.
 #
-# The APKs are debug builds signed with this runner's debug key, so they cannot update an app
-# installed from a build made on another PC (Android refuses a different signature): uninstall
-# first, or use install-projector.bat, which offers to.
+# The debug APKs are signed with this runner's debug key, so they cannot update an app installed
+# from a build made on another PC (Android refuses a different signature): uninstall first, or use
+# install-projector.bat, which offers to. The debug CineAgent still needs the installer's adb
+# permission grants.
+#
+# CineAgent is also signed with a projector's platform key, when that key is available as repo
+# secrets. A platform key belongs to ONE firmware, so each signed APK is named after its model and
+# only installs with full permissions on that model:
+#   E1 Pro  - secrets E1PRO_PLATFORM_PK8 + E1PRO_PLATFORM_X509_PEM (base64 of platform.pk8 and
+#             platform.x509.pem) -> CineAgent-<version>-e1pro-platform-signed.apk
+# Without those secrets (e.g. on pull requests from forks) the signing step is skipped and only the
+# debug APK is built. Another model gets its own pair of secrets and a copy of the signing step.
 name: Build APKs
 
 on:
   push:
-    branches: [main, "boatcinehead-*"]
-    tags: ["v*"]
+    branches: [main, "boatcinehead-*", "cineagent-*"]
+    tags: ["v*", "cineagent-v*"]
   pull_request:
   workflow_dispatch:
 
@@ -30,6 +39,9 @@ jobs:
     defaults:
       run:
         working-directory: ${{ matrix.dir }}
+    env:
+      E1PRO_PLATFORM_PK8: ${{ secrets.E1PRO_PLATFORM_PK8 }}
+      E1PRO_PLATFORM_X509_PEM: ${{ secrets.E1PRO_PLATFORM_X509_PEM }}
     steps:
       - uses: actions/checkout@v4
 
@@ -52,6 +64,7 @@ jobs:
           name="${{ matrix.app }}-${version}-debug.apk"
           mkdir -p "$GITHUB_WORKSPACE/out"
           cp app/build/outputs/apk/debug/app-debug.apk "$GITHUB_WORKSPACE/out/$name"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "name=$name" >> "$GITHUB_OUTPUT"
           echo "Built $name"
 
@@ -61,9 +74,37 @@ jobs:
           path: out/${{ steps.apk.outputs.name }}
           if-no-files-found: error
 
+      # zipalign before apksigner (v2+ signatures cover the aligned bytes). The key files exist only
+      # for this step and are deleted at the end, whatever happens.
+      - name: Platform-sign CineAgent for E1 Pro
+        id: e1pro
+        if: matrix.app == 'CineAgent' && env.E1PRO_PLATFORM_PK8 != '' && env.E1PRO_PLATFORM_X509_PEM != ''
+        run: |
+          bt=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          keydir="$RUNNER_TEMP/e1pro-key"
+          mkdir -p "$keydir"
+          trap 'rm -rf "$keydir"' EXIT
+          printf '%s' "$E1PRO_PLATFORM_PK8" | base64 -d > "$keydir/platform.pk8"
+          printf '%s' "$E1PRO_PLATFORM_X509_PEM" | base64 -d > "$keydir/platform.x509.pem"
+          name="CineAgent-${{ steps.apk.outputs.version }}-e1pro-platform-signed.apk"
+          "$bt/zipalign" -f -p 4 app/build/outputs/apk/debug/app-debug.apk "$keydir/aligned.apk"
+          "$bt/apksigner" sign --key "$keydir/platform.pk8" --cert "$keydir/platform.x509.pem" \
+            --out "$GITHUB_WORKSPACE/out/$name" "$keydir/aligned.apk"
+          "$bt/apksigner" verify --print-certs "$GITHUB_WORKSPACE/out/$name" | grep -E "DN|SHA-1"
+          rm -f "$GITHUB_WORKSPACE/out/$name.idsig"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "Signed $name"
+
+      - uses: actions/upload-artifact@v4
+        if: steps.e1pro.outcome == 'success'
+        with:
+          name: ${{ steps.e1pro.outputs.name }}
+          path: out/${{ steps.e1pro.outputs.name }}
+          if-no-files-found: error
+
   release:
     name: Publish release
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/cineagent-v')
     needs: build
     runs-on: ubuntu-latest
     permissions:

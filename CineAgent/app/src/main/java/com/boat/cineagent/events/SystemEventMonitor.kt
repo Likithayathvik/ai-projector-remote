@@ -3,7 +3,6 @@ package com.boat.cineagent.events
 import android.app.AppOpsManager
 import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
-import android.bluetooth.BluetoothDevice
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -11,7 +10,6 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.database.ContentObserver
 import android.media.AudioManager
-import android.net.wifi.WifiManager
 import android.os.Handler
 import android.os.Looper
 import android.os.Process
@@ -30,15 +28,12 @@ class SystemEventMonitor(
     private val context: Context,
     private val onEvent: (JSONObject) -> Unit
 ) {
-    private var wifiReceiver: BroadcastReceiver? = null
-    private var bluetoothReceiver: BroadcastReceiver? = null
     private var volumeReceiver: BroadcastReceiver? = null
     private var shutdownReceiver: BroadcastReceiver? = null
 
     @Volatile
     private var running = false
     private var lastForegroundPackage: String? = null
-    private var lastWifiConnected: Boolean? = null
     @Volatile
     private var lastFocusedFieldSignature: String? = null
     private var lastDolby: Boolean? = null
@@ -60,8 +55,6 @@ class SystemEventMonitor(
 
     fun start() {
         running = true
-        registerWifiReceiver()
-        registerBluetoothReceiver()
         registerVolumeReceiver()
         registerShutdownReceiver()
         registerDolbyObserver()
@@ -71,7 +64,7 @@ class SystemEventMonitor(
 
     fun stop() {
         running = false
-        for (receiver in listOf(wifiReceiver, bluetoothReceiver, volumeReceiver, shutdownReceiver)) {
+        for (receiver in listOf(volumeReceiver, shutdownReceiver)) {
             receiver?.let {
                 try {
                     context.unregisterReceiver(it)
@@ -94,41 +87,6 @@ class SystemEventMonitor(
 
     private fun emit(eventName: String) {
         onEvent(JSONObject().put("event", eventName))
-    }
-
-    private fun registerWifiReceiver() {
-        val filter = IntentFilter(WifiManager.NETWORK_STATE_CHANGED_ACTION)
-        val receiver = object : BroadcastReceiver() {
-            override fun onReceive(ctx: Context, intent: Intent) {
-                val networkInfo = intent.getParcelableExtra<android.net.NetworkInfo>(WifiManager.EXTRA_NETWORK_INFO)
-                val connected = networkInfo?.isConnected == true
-                if (lastWifiConnected == connected) return
-                lastWifiConnected = connected
-                emit(if (connected) "WIFI_CONNECTED" else "WIFI_DISCONNECTED")
-            }
-        }
-        context.registerReceiver(receiver, filter)
-        wifiReceiver = receiver
-    }
-
-    private fun registerBluetoothReceiver() {
-        val filter = IntentFilter().apply {
-            addAction(BluetoothDevice.ACTION_ACL_CONNECTED)
-            addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED)
-        }
-        val receiver = object : BroadcastReceiver() {
-            override fun onReceive(ctx: Context, intent: Intent) {
-                when (intent.action) {
-                    BluetoothDevice.ACTION_ACL_CONNECTED -> emit("BLUETOOTH_CONNECTED")
-                    BluetoothDevice.ACTION_ACL_DISCONNECTED -> emit("BLUETOOTH_DISCONNECTED")
-                }
-            }
-        }
-        try {
-            context.registerReceiver(receiver, filter)
-            bluetoothReceiver = receiver
-        } catch (t: SecurityException) {
-        }
     }
 
     private fun registerVolumeReceiver() {
