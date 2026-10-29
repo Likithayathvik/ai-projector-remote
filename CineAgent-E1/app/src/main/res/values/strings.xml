@@ -1,0 +1,17 @@
+<resources>
+    <string name="app_name">CineAgent</string>
+    <string name="status_running">CineAgent is running</string>
+    <string name="status_stopped">CineAgent is stopped</string>
+    <string name="notification_channel_name">CineAgent Background Service</string>
+    <string name="notification_title">CineAgent</string>
+    <string name="notification_text">Listening for boAtCineHead on the local network</string>
+    <string name="btn_start">Start Service</string>
+    <string name="btn_stop">Stop Service</string>
+    <string name="btn_usage_access">Grant Usage Access</string>
+    <string name="label_device_name">Device Name</string>
+    <string name="label_ip_address">IP Address</string>
+    <string name="label_serial">Serial Number</string>
+    <string name="label_udp_port">UDP Discovery Port</string>
+    <string name="label_tcp_port">TCP Command Port</string>
+    <string name="label_clients">Connected Clients</string>
+</resources>

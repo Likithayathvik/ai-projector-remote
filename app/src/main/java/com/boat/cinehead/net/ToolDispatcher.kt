@@ -1,9 +1,9 @@
 package com.boat.cinehead.net
 
 /**
- * Maps the Gemini tool-calling function names (SRS section 6) and the on-screen
- * remote buttons onto CineAgent commands, via [RemoteExecutor] so the mapping stays
- * identical whether triggered by touch or by voice/chat.
+ * Maps tool names - from the on-screen remote buttons and CommandRouter's chat/voice results -
+ * onto CineAgent commands, via [RemoteExecutor] so the mapping stays identical whether
+ * triggered by touch or by voice/chat.
  */
 class ToolDispatcher(
     private val appSettings: AppSettingsStore,
@@ -54,10 +54,7 @@ class ToolDispatcher(
             "launch_hotstar" -> launchOrReportMissing(
                 executor, "Hotstar", listOf(appSettings.hotstarPackage) + HOTSTAR_FALLBACKS
             )
-            "media_play" -> executor.sendCommand("PLAY")
-            "media_pause" -> executor.sendCommand("PAUSE")
             "media_play_pause" -> executor.sendCommand("PLAY_PAUSE")
-            "media_stop" -> executor.sendCommand("STOP")
             "media_next" -> executor.sendCommand("NEXT")
             "media_previous" -> executor.sendCommand("PREVIOUS")
             "media_rewind" -> seekRelative(executor, -SEEK_STEP_MS)

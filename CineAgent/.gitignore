@@ -9,3 +9,10 @@
 # IDE / tooling
 /.idea
 /.claude/
+
+# Signing keys - never commit (the E1 platform key lives only in repo secrets)
+keys/
+*.pk8
+*.pem
+*.jks
+*.keystore

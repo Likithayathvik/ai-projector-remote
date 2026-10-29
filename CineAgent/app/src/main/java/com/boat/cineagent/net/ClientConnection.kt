@@ -24,6 +24,16 @@ class ClientConnection(val socket: Socket) {
     @Volatile
     var disconnectWarned: Boolean = false
 
+    /** The session this client proved with AUTH; null until then. Only authenticated clients
+     *  get commands executed and receive pushed events. */
+    @Volatile
+    var sessionId: String? = null
+
+    val isAuthenticated: Boolean
+        get() = sessionId != null
+
+    val address: String = socket.inetAddress?.hostAddress ?: "unknown"
+
     fun markActivity() {
         lastActivityMillis = System.currentTimeMillis()
         disconnectWarned = false

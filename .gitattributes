@@ -1,0 +1,4 @@
+# install-projector.bat must keep Windows line endings (cmd mishandles goto labels in LF files).
+*.bat text eol=crlf
+# gradlew runs on the Linux CI runners.
+gradlew text eol=lf

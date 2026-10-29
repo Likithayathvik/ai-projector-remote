@@ -3,16 +3,14 @@ package com.boat.cinehead.ui.remote
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.boat.cinehead.agent.VoiceAgentClient
 import com.boat.cinehead.net.AppSettingsStore
+import com.boat.cinehead.net.CineAgentErrorCodes
 import com.boat.cinehead.net.CommandResult
 import com.boat.cinehead.net.ConnectionState
 import com.boat.cinehead.net.FocusedTextField
 import com.boat.cinehead.net.ProjectorConnectionManager
 import com.boat.cinehead.net.ToolDispatcher
 import com.boat.cinehead.net.VolumeInfo
-import org.json.JSONObject
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -21,16 +19,16 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
-data class ChatMessage(val text: String, val isUser: Boolean, val isError: Boolean = false)
+data class ChatMessage(val text: String, val isUser: Boolean)
 
-/** What Keyboard Mode should currently show, or null to hide it.
- *  - [FieldFocused] is driven by CineAgent's TEXT_FIELD_FOCUSED push - a real editable field
- *    is focused on the projector (login / password / a search box that exposes one). "Send"
- *    there goes to SEND_TEXT (accessibility ACTION_SET_TEXT).
- *  - [SearchQuery] is opened by us, on a timer, after the Search button fired OPEN_SEARCH for
- *    an app whose in-app search has no field the projector can report as focused (YouTube TV).
- *    "Send" there re-fires OPEN_SEARCH with the typed query, which CineAgent turns into the
- *    search_query= deep link. */
+/** What Keyboard Mode should currently show, or null to hide it. Keyboard Mode only ever opens
+ *  after the phone's Search button opened a search screen on the projector - a field focused
+ *  on its own (a login or password box) never brings it up.
+ *  - [FieldFocused]: once open, CineAgent reports a real focused search field (Hotstar's
+ *    EditText, ...). "Send" goes to SEND_TEXT (accessibility ACTION_SET_TEXT).
+ *  - [SearchQuery]: once open, the app's search has no field the projector can report as
+ *    focused (YouTube TV). "Send" types with SEND_TEXT or re-fires OPEN_SEARCH with the query,
+ *    which CineAgent turns into the search_query= deep link. */
 sealed class KeyboardMode {
     data class FieldFocused(val field: FocusedTextField) : KeyboardMode()
     data object SearchQuery : KeyboardMode()
@@ -41,8 +39,6 @@ data class AppPackageSettings(
     val youtube: String,
     val primeVideo: String,
     val hotstar: String,
-    val usbSourceCommand: String,
-    val serverUrl: String,
 )
 
 private const val TAG = "RemoteViewModel"
@@ -69,12 +65,6 @@ private const val DEVICE_CAPABILITIES_RETRY_INTERVAL_MS = 700L
 // OPEN_SEARCH{query}.
 private const val SEARCH_KEYBOARD_OPEN_DELAY_MS = 2_000L
 
-/** The only tool-calling actions the voice/chat agent is allowed to trigger.
- *  Anything else gets the "not supported" popup instead of being dispatched. */
-private val SUPPORTED_AGENT_TOOLS = setOf(
-    "set_volume", "open_settings", "open_wifi_settings", "open_bluetooth_settings", "search"
-)
-
 /** Maps CommandRouter's canonical platform/app names (SEARCH and OPEN_APP results) to the existing
  *  launch_X tools ToolDispatcher already supports. */
 private val PLATFORM_LAUNCH_TOOLS = mapOf(
@@ -95,13 +85,9 @@ class RemoteViewModel(
 
     val connectionState: StateFlow<ConnectionState> = connectionManager.state
 
-    /** Keyboard Mode Screen: non-null exactly when the projector reports an editable field
-     *  focused, so the UI shows/hides purely by observing this - see RemoteScreen's Dialog. */
-    val focusedTextField: StateFlow<FocusedTextField?> = connectionManager.focusedTextField
-
-    /** Drives the timer-based (non-FieldFocused) Keyboard Mode: set by [runSearch] after
-     *  CineAgent opens an in-app search screen, so the user can type from the phone instead
-     *  of the projector's on-screen keyboard. Cleared only on Back or on disconnect - sending a search keeps it open. */
+    /** The only thing that opens Keyboard Mode: set by [runSearch] after CineAgent opens an
+     *  in-app search screen, so the user can type from the phone instead of the projector's
+     *  on-screen keyboard. Cleared only on Back or on disconnect - sending a search keeps it open. */
     private val _searchKeyboardVisible = MutableStateFlow(false)
 
     /** From the last OPEN_SEARCH response: true when the app exposes no typeable field and
@@ -110,24 +96,17 @@ class RemoteViewModel(
     private var lastSearchAcceptsQuery = false
 
     /** The single source RemoteScreen observes to decide whether - and which kind of -
-     *  Keyboard Mode to show. A genuinely focused field always wins over our timer-driven
-     *  search entry, so if an app ever does expose a focusable search box the SEND_TEXT path
-     *  is used instead. */
+     *  Keyboard Mode to show. Hidden unless the phone's Search opened it; while open, a
+     *  genuinely focused field wins over the plain search entry, so an app that exposes a
+     *  focusable search box gets the SEND_TEXT path. */
     val keyboardMode: StateFlow<KeyboardMode?> =
         combine(connectionManager.focusedTextField, _searchKeyboardVisible) { field, searchVisible ->
             when {
+                !searchVisible -> null
                 field != null -> KeyboardMode.FieldFocused(field)
-                searchVisible -> KeyboardMode.SearchQuery
-                else -> null
+                else -> KeyboardMode.SearchQuery
             }
         }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
-
-    /** Bumped every time the user presses Search and the projector opens a search screen.
-     *  RemoteScreen clears its "user backed out of this field" latch on each bump, so pressing
-     *  Search always brings Keyboard Mode back - even when the projector's search box never
-     *  lost focus in between (Hotstar keeps its search field focused on the search page). */
-    private val _searchRequests = MutableStateFlow(0)
-    val searchRequests: StateFlow<Int> = _searchRequests
 
     private val _isSendingText = MutableStateFlow(false)
     val isSendingText: StateFlow<Boolean> = _isSendingText
@@ -175,23 +154,9 @@ class RemoteViewModel(
     private val _statusMessage = MutableStateFlow<String?>(null)
     val statusMessage: StateFlow<String?> = _statusMessage
 
-    /**
-     * Popup shown only when the agent tries to call a tool outside the four
-     * supported voice/chat actions (set_volume, open_settings,
-     * open_wifi_settings, open_bluetooth_settings).
-     */
+    /** Popup shown when CommandRouter can't map a chat/voice command to a supported action. */
     private val _actionPopup = MutableStateFlow<String?>(null)
     val actionPopup: StateFlow<String?> = _actionPopup
-
-    /**
-     * True only while a query is in flight (connected to server).
-     * False at all other times — no persistent connection.
-     */
-    private val _agentConnected = MutableStateFlow(false)
-    val agentConnected: StateFlow<Boolean> = _agentConnected
-
-    // Current active client — replaced per query
-    private var voiceAgentClient: VoiceAgentClient? = null
 
     init {
         viewModelScope.launch {
@@ -206,23 +171,6 @@ class RemoteViewModel(
                 }
             }
         }
-        // No persistent connection on init — server runs, app connects per query
-    }
-
-    private suspend fun handleAgentCommand(action: String, args: Map<String, Any?>) {
-        if (action !in SUPPORTED_AGENT_TOOLS) {
-            _actionPopup.value = "Tool is not supported and Please use remote for your action"
-            _isSending.value = false
-            return
-        }
-        val result = runTool(action, args)
-        // Supported tools just perform the action on the projector — no confirmation
-        // popup on success. Failures still surface, but as a lightweight snackbar
-        // (statusMessage) rather than a blocking dialog.
-        if (!result.success) {
-            _statusMessage.value = "Failed: ${result.message}"
-        }
-        _isSending.value = false
     }
 
     fun pressButton(toolName: String, label: String) {
@@ -238,14 +186,22 @@ class RemoteViewModel(
         viewModelScope.launch {
             // The remote's single Mute button toggles CineAgent's separate MUTE/UNMUTE
             // commands - without this, repeated presses just re-sent MUTE and the projector
-            // never unmuted.
+            // never unmuted. The state flips here, at the tap (this runs on the main thread
+            // before the first suspension), not after the reply: flipping on the reply let a
+            // quick double tap read the old state twice and send MUTE, MUTE - the button
+            // showed unmuted while the projector stayed muted.
+            val muting = !_isMuted.value
             val effectiveTool = if (toolName == "mute") {
-                if (_isMuted.value) "unmute" else "mute"
+                _isMuted.value = muting
+                if (muting) "mute" else "unmute"
             } else {
                 toolName
             }
             val result = runTool(effectiveTool, emptyMap())
-            if (toolName == "mute" && result.success) _isMuted.value = !_isMuted.value
+            // Failed (or dropped) - put the button back, unless a later tap already moved it.
+            if (toolName == "mute" && !result.success && _isMuted.value == muting) {
+                _isMuted.value = !muting
+            }
         }
     }
 
@@ -279,12 +235,19 @@ class RemoteViewModel(
             return
         }
         delay(POWER_OFF_DISCONNECT_DELAY_MS)
-        disconnect()
+        // Not the user's Disconnect: keep Key #2 so the phone reconnects without discovering
+        // again once the projector is switched back on.
+        connectionManager.disconnect()
+        _isPoweringOff.value = false
+        _searchKeyboardVisible.value = false
     }
 
     private suspend fun runTool(toolName: String, args: Map<String, Any?>): CommandResult {
         val result = toolDispatcher.dispatch(toolName, args)
-        if (!result.success) _statusMessage.value = result.message
+        // A dropped tap was replaced by a newer one on purpose - nothing to tell the user.
+        if (!result.success && result.errorCode != CineAgentErrorCodes.COMMAND_DROPPED) {
+            _statusMessage.value = result.message
+        }
         if (toolName in VOLUME_REFRESH_TOOLS) refreshVolume()
         return result
     }
@@ -309,21 +272,13 @@ class RemoteViewModel(
             return
         }
         lastSearchAcceptsQuery = response?.optBoolean("acceptsQuery", false) == true
-        // If the projector already has a search field focused (e.g. already on Hotstar's search
-        // page), this re-shows Keyboard Mode for it right away.
-        _searchRequests.value++
 
-        // CineAgent opened *some* in-app search screen. Bring up Keyboard Mode from the phone
-        // so the user can type here instead of on the projector's on-screen keyboard. Skip it
-        // only when CineAgent already reports a real focused field on the projector - the
-        // FieldFocused path covers that. Hotstar is why this is no longer gated on
-        // acceptsQuery: it opens a plain EditText search box (OPEN_SEARCH -> SUCCESS) that
-        // CineAgent never flags as acceptsQuery and never reports focused, so previously the
-        // phone showed nothing and stranded the user on the projector keyboard.
+        // CineAgent opened *some* in-app search screen - in any app, not gated on acceptsQuery.
+        // Bring up Keyboard Mode from the phone so the user can type here instead of on the
+        // projector's on-screen keyboard. [keyboardMode] picks the FieldFocused variant if the
+        // search box reports focus by then, SearchQuery otherwise.
         delay(SEARCH_KEYBOARD_OPEN_DELAY_MS)
-        if (connectionManager.focusedTextField.value == null) {
-            _searchKeyboardVisible.value = true
-        }
+        _searchKeyboardVisible.value = true
     }
 
     /** Keyboard Mode "Send" for the timer-driven [KeyboardMode.SearchQuery] variant. When the
@@ -351,7 +306,7 @@ class RemoteViewModel(
         }
     }
 
-    /** Back out of the timer-driven search Keyboard Mode without sending anything. */
+    /** Back out of Keyboard Mode (either variant) without sending anything. */
     fun cancelSearchKeyboard() {
         _searchKeyboardVisible.value = false
     }
@@ -391,12 +346,7 @@ class RemoteViewModel(
     }
 
     /**
-     * Called when user clicks Send (text) or finishes speaking (mic).
-     * Creates a fresh WebSocket connection per query:
-     *   connect → send query → receive response → disconnect
-     */
-    /**
-     * Routes free-text chat/voice input entirely on-device via CommandRouter - no network
+     * Called when user clicks Send (text) or finishes speaking (mic). Routes free-text chat/voice input entirely on-device via CommandRouter - no network
      * call, no server, no GCP dependency. See router/CommandRouter.java for the classifier
      * itself.
      */
@@ -450,12 +400,10 @@ class RemoteViewModel(
         }
     }
 
-
-
     /** Keyboard Mode Screen "Send" - goes straight to CineAgent's SEND_TEXT (accessibility
-     *  ACTION_SET_TEXT on whatever field is still focused), not through the Gemini voice-agent
-     *  pipeline [sendChat] uses - that's a different, unrelated feature that happens to share a
-     *  similar text+mic input card. */
+     *  ACTION_SET_TEXT on whatever field is still focused), not through the CommandRouter path
+     *  [sendChat] uses - that's a different feature that happens to share a similar text+mic
+     *  input card. */
     fun sendKeyboardText(text: String) {
         if (text.isBlank()) return
         viewModelScope.launch {
@@ -476,8 +424,6 @@ class RemoteViewModel(
         youtube = appSettingsStore.youtubePackage,
         primeVideo = appSettingsStore.primeVideoPackage,
         hotstar = appSettingsStore.hotstarPackage,
-        usbSourceCommand = appSettingsStore.usbSourceCommand,
-        serverUrl = appSettingsStore.serverUrl,
     )
 
     fun saveAppPackageSettings(settings: AppPackageSettings) {
@@ -485,19 +431,12 @@ class RemoteViewModel(
         appSettingsStore.youtubePackage = settings.youtube
         appSettingsStore.primeVideoPackage = settings.primeVideo
         appSettingsStore.hotstarPackage = settings.hotstar
-        appSettingsStore.usbSourceCommand = settings.usbSourceCommand
-        appSettingsStore.serverUrl = settings.serverUrl
     }
 
+    /** The Disconnect button: ends the session, so CineAgent and this phone both erase Key #2. */
     fun disconnect() {
-        voiceAgentClient?.disconnect()
-        connectionManager.disconnect()
+        connectionManager.endSession()
         _isPoweringOff.value = false
         _searchKeyboardVisible.value = false
-    }
-
-    override fun onCleared() {
-        super.onCleared()
-        voiceAgentClient?.disconnect()
     }
 }

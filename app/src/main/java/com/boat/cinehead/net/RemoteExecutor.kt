@@ -3,7 +3,7 @@ package com.boat.cinehead.net
 import org.json.JSONObject
 
 /**
- * Logical device-control surface used by the UI and the Gemini tool dispatcher.
+ * Logical device-control surface used by the UI and [ToolDispatcher].
  * CineAgent's TCP/JSON command protocol is the implementation (see
  * [com.boat.cinehead.net.CineAgentRemoteExecutor]); any future backend can implement
  * this same interface without touching the UI or tool-calling layers.
@@ -34,4 +34,8 @@ data class VolumeInfo(val current: Int, val max: Int)
 
 object CineAgentErrorCodes {
     const val APP_NOT_INSTALLED = 1004
+    /** Another phone is already connected to the projector. */
+    const val DEVICE_BUSY = 1007
+    /** CineAgent keeps at most 3 commands waiting per phone; a newer tap pushed this one out. */
+    const val COMMAND_DROPPED = 1011
 }

@@ -1,3 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Android 11 and older. The Install ID (client_identity) and Key #2 (last_connected) must
+     never leave this phone: Key #2 is a secret, and a restored Install ID on a second phone
+     would make CineAgent treat both phones as one. -->
 <full-backup-content>
+    <exclude domain="sharedpref" path="client_identity.xml" />
+    <exclude domain="sharedpref" path="last_connected.xml" />
 </full-backup-content>

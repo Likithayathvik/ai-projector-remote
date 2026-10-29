@@ -262,19 +262,6 @@ class SpeechToText(
         startSegment()
     }
 
-    /** Full teardown - lifecycle cleanup, not the mic button. */
-    fun stop() {
-        stoppedByUser = false
-        fastFailures = 0
-        transcript.setLength(0)
-        lastPartial = ""
-        segmentActive = false
-        mainHandler.removeCallbacksAndMessages(null)
-        setListening(false)
-        recognizer?.destroy()
-        recognizer = null
-    }
-
     companion object {
         private const val TAG = "SpeechToText"
         private const val RESTART_DELAY_MS = 120L

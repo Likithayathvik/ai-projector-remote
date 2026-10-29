@@ -1,5 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Android 12 and newer. The Install ID (client_identity) and Key #2 (last_connected) must
+     never leave this phone, neither to cloud backup nor to a phone-to-phone transfer: Key #2 is
+     a secret, and a copied Install ID would make CineAgent treat both phones as one. -->
 <data-extraction-rules>
     <cloud-backup>
+        <exclude domain="sharedpref" path="client_identity.xml" />
+        <exclude domain="sharedpref" path="last_connected.xml" />
     </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="client_identity.xml" />
+        <exclude domain="sharedpref" path="last_connected.xml" />
+    </device-transfer>
 </data-extraction-rules>

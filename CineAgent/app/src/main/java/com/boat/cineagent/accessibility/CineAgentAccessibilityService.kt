@@ -254,9 +254,4 @@ class CineAgentAccessibilityService : AccessibilityService() {
         if (!target.isFocusable) return false
         return target.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
     }
-
-    /** True if any on-screen node's text or content description contains [text]. Used to detect
-     *  a known screen (e.g. an app's home screen by a "Home" nav label) without clicking anything. */
-    fun hasNodeWithText(text: String): Boolean =
-        findNodeByText(rootInActiveWindow, text) != null
 }

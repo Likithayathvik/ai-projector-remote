@@ -21,7 +21,8 @@ class CineAgentRemoteExecutor(private val connection: CineAgentConnection) : Rem
     override suspend fun setVolumeIndex(index: Int): CommandResult =
         sendCommand("SET_VOLUME", mapOf("value" to index))
 
-    override suspend fun ping(): CommandResult = sendCommand("PING")
+    override suspend fun ping(): CommandResult =
+        connection.sendCommand("PING", timeoutMs = CineAgentConnection.PING_TIMEOUT_MS).toCommandResult()
 
     override fun disconnect() {
         connection.close()

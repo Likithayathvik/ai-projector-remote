@@ -96,35 +96,8 @@ class CommandHandler(private val context: Context) {
         // SOURCE INPUT row this should fail fast and fall through to the picker-based flow below,
         // not add multiple seconds of latency to every SELECT_SOURCE call on every vendor.
         private const val HOME_SOURCE_ROW_INITIAL_DELAY_MS = 300L
-
-        // Unused since the deep-link OPEN_SEARCH approach was superseded 2026-08-25 (see
-        // handleOpenSearch()) - kept alongside the commented-out code that referenced it.
-        // private const val YOUTUBE_SEARCH_FOCUS_DELAY_MS = 900L
-
-        // handleOpenSearch()'s reveal-step wait: how long to give an app's UI to actually mount
-        // a nav element (e.g. Hotstar's left rail) into the accessibility tree after the reveal
-        // key fires, before clickNodeByText() looks for it. Confirmed live 2026-08-25 that
-        // Hotstar's rail nodes, including "Search", are absent from the tree in a dump taken
-        // immediately after DPAD_LEFT if not given a moment to render first.
-        private const val SEARCH_REVEAL_DELAY_MS = 500L
-        // handleOpenSearch()'s click retry - see the comment at the call site for why a single
-        // attempt is insufficient on Compose-based UIs (Netflix).
-        private const val SEARCH_CLICK_RETRY_INTERVAL_MS = 300L
-        private const val SEARCH_CLICK_RETRY_WINDOW_MS = 1_500L
         private const val HOME_SOURCE_ROW_RETRY_INTERVAL_MS = 250L
         private const val HOME_SOURCE_ROW_WINDOW_MS = 500L
-
-        // OPEN_SEARCH is expected to work from anywhere inside the app, not just its home
-        // screen - e.g. mid-playback the app's persistent "Search" nav element isn't in the
-        // accessibility tree at all, so clickNodeByText("Search") fails outright (confirmed
-        // live on Netflix during playback). When the first pass fails, walk BACK toward the
-        // app's home screen, re-checking for Search after each press. Kept short so the whole
-        // command still fits the phone's flat 5s response timeout: worst case is
-        // SEARCH_CLICK_RETRY_WINDOW_MS (first pass) + SEARCH_HOME_BACK_PRESSES x
-        // (SEARCH_BACK_SETTLE_MS + reveal + SEARCH_BACK_CLICK_RETRY_WINDOW_MS).
-        private const val SEARCH_HOME_BACK_PRESSES = 2
-        private const val SEARCH_BACK_SETTLE_MS = 450L
-        private const val SEARCH_BACK_CLICK_RETRY_WINDOW_MS = 450L
 
         // The per-app OPEN_SEARCH navigation (YouTube / Netflix ninja / Hotstar branches below)
         // runs on a background thread - handleOpenSearch() replies SUCCESS immediately - so these
@@ -216,11 +189,16 @@ class CommandHandler(private val context: Context) {
         private const val HOTSTAR_PACKAGE = "in.startv.hotstar"
         private const val HOTSTAR_MAIN_ACTIVITY = "com.hotstar.MainActivity"
         private const val HOTSTAR_SEARCH_BAR_ID = "in.startv.hotstar:id/search_bar"
-        // Poll for id/search_bar to appear + become clickable after firing the deep link,
-        // rather than a blind wait. Window covers the ~10s colder-state render; re-fire covers
-        // a first fire that landed mid-transition and was dropped.
+        // Poll for id/search_bar to appear + become clickable after firing the deep link, rather
+        // than a blind wait; the re-fire covers a first fire that landed mid-transition and was
+        // dropped. The poll runs before OPEN_SEARCH replies, so the phone opens Keyboard Mode only
+        // when the box was really found. Signed out, Hotstar shows its login page instead
+        // (confirmed live 2026-10-29, JioHotstar 26.09.28): no search_bar, and every re-fire
+        // reloaded that page and wiped the number typed into it. So the window stays inside the
+        // phone's 10s command timeout (signed in, search_bar showed in 0.2-5.1s) and, when it runs
+        // out, the search stops with an error - no further re-fires, no Keyboard Mode.
         private const val HOTSTAR_EXPLORE_POLL_INTERVAL_MS = 300L
-        private const val HOTSTAR_EXPLORE_POLL_WINDOW_MS = 15_000L
+        private const val HOTSTAR_EXPLORE_POLL_WINDOW_MS = 7_000L
         private const val HOTSTAR_EXPLORE_REFIRE_MS = 4_000L
 
         // search_bar focus-reassert tuning, added after clickNodeById() started granting real
@@ -454,22 +432,7 @@ class CommandHandler(private val context: Context) {
             Process.myUid(),
             context.packageName
         )
-        return when (mode) {
-            // Explicitly allowed (Settings toggle, or `appops set GET_USAGE_STATS allow`).
-            AppOpsManager.MODE_ALLOWED -> true
-            // No explicit appop set. Android's UsageStatsService then falls back to the
-            // PACKAGE_USAGE_STATS permission, which the platform-signed build holds (granted by
-            // the signature). Under this fallback queryEvents()/queryUsageStats() return data
-            // normally, so treating MODE_DEFAULT + granted permission as "has access" is what
-            // lets GET_RUNNING_APP work without the installer's `appops set ... allow` step.
-            AppOpsManager.MODE_DEFAULT ->
-                context.checkPermission(
-                    android.Manifest.permission.PACKAGE_USAGE_STATS,
-                    Process.myPid(),
-                    Process.myUid()
-                ) == PackageManager.PERMISSION_GRANTED
-            else -> false
-        }
+        return mode == AppOpsManager.MODE_ALLOWED
     }
 
     /** Most-recent MOVE_TO_FOREGROUND event in the last 10 minutes of usage-stats history -
@@ -553,79 +516,6 @@ class CommandHandler(private val context: Context) {
         return response
     }
 
-    // --- Superseded 2026-08-25, kept for reference only - do not re-enable without re-confirming
-    // live first. This was the original per-app deep-link approach: fire an ACTION_VIEW/plain
-    // Intent at each app's own search URI/Activity and hope its code routes it to a search
-    // screen. Replaced because that routing is entirely up to each app's internal Intent
-    // handling and isn't reliable even when an app *looks* like it should support it: Hotstar
-    // registers a manifest intent-filter for android.intent.action.SEARCH on MainActivity, but
-    // confirmed live under every variant tried - warm relaunch (delivered to onNewIntent, no
-    // screen change), cold launch via onCreate, and cold launch with a real
-    // SearchManager.QUERY extra attached - it lands on Hotstar's normal Home screen every time,
-    // never search. That's a genuine dead end in the app's own code, not a missing parameter.
-    // See the com.amazon.amazonvideo.livingroom case below for the same category of dead end on
-    // Prime Video's other build.
-    //
-    // private fun buildSearchIntent(foregroundPackage: String): Intent? = when (foregroundPackage) {
-    //     "com.netflix.mediaclient" -> Intent(Intent.ACTION_VIEW, Uri.parse("https://www.netflix.com/search"))
-    //         .setClassName("com.netflix.mediaclient", "com.netflix.mediaclient.ui.launch.NetflixComLaunchActivity")
-    //     "com.google.android.youtube.tv" -> Intent(Intent.ACTION_VIEW, Uri.parse("https://www.youtube.com/results?search_query="))
-    //         .setClassName("com.google.android.youtube.tv", "dev.cobalt.app.MainActivity")
-    //     "com.amazon.avod.thirdpartyclient" -> Intent()
-    //         .setClassName("com.amazon.avod.thirdpartyclient", "com.amazon.avod.client.activity.SearchQueryActivity")
-    //     // com.amazon.amazonvideo.livingroom deliberately has no case here - confirmed live
-    //     // 2026-08-18 that the https://app.primevideo.com/search deep link is a dead end for
-    //     // this build: com.amazon.ignition.IgnitionActivity ignores the dat= URL entirely and
-    //     // hands off to IgniteActivity exactly as it does on a normal cold app open, landing on
-    //     // the profile picker ("Who's Watching") instead of search.
-    //     else -> null
-    // }
-
-    // Current approach: click each app's own on-screen "Search" element directly via the
-    // accessibility service, the same clickNodeByText() mechanism already used for HDMI/USB
-    // source rows - not an Intent guess. Two things are confirmed per app before it's added
-    // here, via a live uiautomator tree dump, not assumed from how the UI looks:
-    //   1. Does a "Search"-labelled node exist at all, and does reaching it require anything
-    //      first (a "reveal" input)?
-    //   2. Does clicking that node actually land on the search screen (screenshot-verified)?
-    //
-    // Netflix: confirmed live 2026-08-25 - "Search" is already a real node in the tree on the
-    // Home screen with nothing pressed first (it's a persistent bottom-nav item); clicking it
-    // lands on the search screen every time.
-    //
-    // Hotstar: confirmed live 2026-08-25 - the left nav rail (which contains "Search") is not
-    // in the accessibility tree at all until something focuses it; a tree dump taken before any
-    // key press has zero nodes for that rail, and "text=Search" only appears in a dump taken
-    // immediately after one DPAD_LEFT. So DPAD_LEFT is a required reveal step here, not
-    // optional polish - there is nothing to click before it runs.
-    //
-    // Prime Video is deliberately not in SEARCH_REVEAL_KEY yet, and needs a fundamentally
-    // different mechanism from the map below even once added - see handleOpenSearch()'s
-    // YouTube TV branch for why, plus its own extra wrinkle: confirmed live 2026-08-25 that its
-    // blind D-pad presses are silently dropped if sent rapid-fire (no delay between adb
-    // keyevent calls) - identical starting state, same key sequence, non-deterministic outcome
-    // (landed on the sidebar 3/3 times paced ~300ms apart, but only 1/2 times unpaced). Add only
-    // with that pacing and the same two-step live confirmation as everything else here.
-    // in.startv.hotstar was here (reveal = DPAD_LEFT) but now has its own dedicated branch in
-    // handleOpenSearch() - it needs a home-screen detection loop and a post-click nav sequence
-    // that this generic reveal+click map can't express.
-    //
-    // com.netflix.mediaclient was here too (reveal = null: click "Search" in the persistent
-    // bottom nav) but moved to its own deep-link branch in handleOpenSearch() as of 2026-09-03,
-    // confirmed live on a CineHead E1 - see NETFLIX_MOBILE_SEARCH_DEEPLINK. The map is now
-    // empty; the generic revealAndClickSearch() path below is kept for the next app that needs
-    // exactly a reveal-then-click-"Search" with no extra navigation.
-    private val SEARCH_REVEAL_KEY = emptyMap<String, ((CineAgentAccessibilityService) -> Boolean)?>()
-
-    // YouTube TV (Cobalt/Chromium runtime) needs a completely different mechanism from
-    // SEARCH_REVEAL_KEY above, not just another entry in it: confirmed live 2026-08-25 via
-    // uiautomator dump that its screen exposes zero accessible nodes at all (one opaque
-    // android.view.View covering the whole content area, plus a handful of meaningless 1x1px
-    // dummy nodes) - clickNodeByText() has structurally nothing to find or click there, ever.
-    // What does work, also confirmed live: blind DPAD_LEFT then DPAD_UP from the YouTube home
-    // screen lands on Search and opens it (no DPAD_CENTER needed). No a11y feedback to verify
-    // with, and position-dependent - only reliable from the app's default home focus.
-
     /** Runs [block] on a daemon thread and returns SUCCESS to the caller immediately. The per-app
      *  search navigation takes far longer than the phone's 5s response timeout (and would trip
      *  its heartbeat), so it must not block the reply - the phone treats OPEN_SEARCH as
@@ -639,6 +529,27 @@ class CommandHandler(private val context: Context) {
             }
         }
         return successResponse(id)
+    }
+
+    /**
+     * Polls for Hotstar's id/search_bar and clicks it (which focuses it) once it shows up,
+     * re-firing [exploreIntent] every HOTSTAR_EXPLORE_REFIRE_MS meanwhile: a single deep-link
+     * fire is silently dropped if Hotstar happens to be mid-transition when it arrives (confirmed
+     * live: first fire ignored, re-fire 4s later worked). False when HOTSTAR_EXPLORE_POLL_WINDOW_MS
+     * runs out first - e.g. Hotstar is signed out and showing its login page.
+     */
+    private fun clickHotstarSearchBar(service: CineAgentAccessibilityService, exploreIntent: Intent): Boolean {
+        val deadline = System.currentTimeMillis() + HOTSTAR_EXPLORE_POLL_WINDOW_MS
+        var lastFire = System.currentTimeMillis()
+        while (System.currentTimeMillis() < deadline) {
+            if (service.clickNodeById(HOTSTAR_SEARCH_BAR_ID)) return true
+            if (System.currentTimeMillis() - lastFire >= HOTSTAR_EXPLORE_REFIRE_MS) {
+                tryStartActivity(exploreIntent)
+                lastFire = System.currentTimeMillis()
+            }
+            Thread.sleep(HOTSTAR_EXPLORE_POLL_INTERVAL_MS)
+        }
+        return false
     }
 
     private fun handleOpenSearch(id: Any?, request: JSONObject): JSONObject {
@@ -785,115 +696,45 @@ class CommandHandler(private val context: Context) {
             if (!tryStartActivity(exploreIntent)) {
                 return errorResponse(id, ErrorCode.COMMAND_FAILED, "Could not open Hotstar search")
             }
+            // Poll for the search field and click it by resource-id to focus it and raise the
+            // on-screen keyboard - before replying (see HOTSTAR_EXPLORE_POLL_WINDOW_MS). id/search_bar
+            // is a real clickable EditText and only enters the tree once the explore page has
+            // rendered; no search_bar means no search here, so the phone must not open Keyboard Mode.
+            if (!clickHotstarSearchBar(service, exploreIntent)) {
+                Log.i(TAG, "OPEN_SEARCH: Hotstar search box not found (signed out?) - not opening Keyboard Mode")
+                return errorResponse(id, ErrorCode.COMMAND_FAILED, "Hotstar search isn't available. Sign in to Hotstar first.")
+            }
             return runSearchNavAsync(id) {
-                // Poll for the search field, then click it by resource-id to focus it and
-                // raise the on-screen keyboard. id/search_bar is a real clickable EditText and
-                // only enters the tree once the explore page has rendered.
-                //
-                // A single deep-link fire is silently dropped if Hotstar happens to be
-                // mid-transition when it arrives (confirmed live: first fire ignored, re-fire
-                // 4s later worked), so keep re-firing it every HOTSTAR_EXPLORE_REFIRE_MS until
-                // the field shows up or the window runs out.
-                val deadline = System.currentTimeMillis() + HOTSTAR_EXPLORE_POLL_WINDOW_MS
-                var lastFire = System.currentTimeMillis()
-                while (System.currentTimeMillis() < deadline) {
-                    if (service.clickNodeById(HOTSTAR_SEARCH_BAR_ID)) {
-                        // Won focus once - Hotstar steals it back within ~700ms (see
-                        // HOTSTAR_SEARCH_BAR_REASSERT_WINDOW_MS), so keep re-requesting it
-                        // (focus only, not another click) until we've outlasted that.
-                        val reassertDeadline = System.currentTimeMillis() + HOTSTAR_SEARCH_BAR_REASSERT_WINDOW_MS
-                        while (System.currentTimeMillis() < reassertDeadline) {
-                            Thread.sleep(HOTSTAR_SEARCH_BAR_REASSERT_INTERVAL_MS)
-                            service.focusNodeById(HOTSTAR_SEARCH_BAR_ID)
-                        }
-                        if (hasQuery) {
-                            // Type the term straight into the focused field (same ACTION_SET_TEXT
-                            // as SEND_TEXT); Hotstar filters results live as it changes. Fire the
-                            // IME action too so a build that needs an explicit submit still runs.
-                            service.setFocusedFieldText(query)
-                            Thread.sleep(HOTSTAR_SEARCH_QUERY_SUBMIT_DELAY_MS)
-                            service.submitFocusedField()
-                            // Hotstar keeps the search bar focused after typing (results update
-                            // live, it never blurs on its own), so once the suppression window
-                            // lapsed the phone would still get a TEXT_FIELD_FOCUSED and pop
-                            // Keyboard Mode ~25s late. Move focus down into the results grid: the
-                            // field genuinely unfocuses (currentFocusedTextField() -> null, no
-                            // Keyboard Mode ever) and the user lands on the results ready to
-                            // navigate. Short tail suppression just rides out that transition.
-                            Thread.sleep(HOTSTAR_SEARCH_QUERY_SUBMIT_DELAY_MS)
-                            service.dpadDown()
-                            SystemEventMonitor.suppressFocusedTextField(HOTSTAR_SEARCH_QUERY_SUBMIT_TAIL_MS)
-                        }
-                        break
-                    }
-                    if (System.currentTimeMillis() - lastFire >= HOTSTAR_EXPLORE_REFIRE_MS) {
-                        tryStartActivity(exploreIntent)
-                        lastFire = System.currentTimeMillis()
-                    }
-                    Thread.sleep(HOTSTAR_EXPLORE_POLL_INTERVAL_MS)
+                // Won focus once - Hotstar steals it back within ~700ms (see
+                // HOTSTAR_SEARCH_BAR_REASSERT_WINDOW_MS), so keep re-requesting it
+                // (focus only, not another click) until we've outlasted that.
+                val reassertDeadline = System.currentTimeMillis() + HOTSTAR_SEARCH_BAR_REASSERT_WINDOW_MS
+                while (System.currentTimeMillis() < reassertDeadline) {
+                    Thread.sleep(HOTSTAR_SEARCH_BAR_REASSERT_INTERVAL_MS)
+                    service.focusNodeById(HOTSTAR_SEARCH_BAR_ID)
+                }
+                if (hasQuery) {
+                    // Type the term straight into the focused field (same ACTION_SET_TEXT
+                    // as SEND_TEXT); Hotstar filters results live as it changes. Fire the
+                    // IME action too so a build that needs an explicit submit still runs.
+                    service.setFocusedFieldText(query)
+                    Thread.sleep(HOTSTAR_SEARCH_QUERY_SUBMIT_DELAY_MS)
+                    service.submitFocusedField()
+                    // Hotstar keeps the search bar focused after typing (results update
+                    // live, it never blurs on its own), so once the suppression window
+                    // lapsed the phone would still get a TEXT_FIELD_FOCUSED and pop
+                    // Keyboard Mode ~25s late. Move focus down into the results grid: the
+                    // field genuinely unfocuses (currentFocusedTextField() -> null, no
+                    // Keyboard Mode ever) and the user lands on the results ready to
+                    // navigate. Short tail suppression just rides out that transition.
+                    Thread.sleep(HOTSTAR_SEARCH_QUERY_SUBMIT_DELAY_MS)
+                    service.dpadDown()
+                    SystemEventMonitor.suppressFocusedTextField(HOTSTAR_SEARCH_QUERY_SUBMIT_TAIL_MS)
                 }
             }
         }
 
-        if (foregroundPackage !in SEARCH_REVEAL_KEY) {
-            return errorResponse(
-                id, ErrorCode.UNSUPPORTED_COMMAND,
-                "Search is not supported for $foregroundPackage"
-            )
-        }
-        val service = requireAccessibilityService()
-            ?: return errorResponse(id, ErrorCode.PERMISSION_DENIED, "Accessibility service not enabled")
-
-        val revealKey = SEARCH_REVEAL_KEY.getValue(foregroundPackage)
-
-        // First try from wherever we are (the app's own home/browse screen already shows the
-        // "Search" nav element on the apps that support this).
-        if (revealAndClickSearch(service, revealKey, SEARCH_CLICK_RETRY_WINDOW_MS)) {
-            return successResponse(id)
-        }
-
-        // Not reachable from here (e.g. mid-playback). Walk BACK toward the app's home screen,
-        // re-checking for Search after each press. Stop early if a press pops us out of the
-        // app entirely rather than blindly hammering BACK.
-        for (i in 0 until SEARCH_HOME_BACK_PRESSES) {
-            if (service.currentForegroundPackageName() != foregroundPackage) break
-            service.goBack()
-            Thread.sleep(SEARCH_BACK_SETTLE_MS)
-            if (revealAndClickSearch(service, revealKey, SEARCH_BACK_CLICK_RETRY_WINDOW_MS)) {
-                return successResponse(id)
-            }
-        }
-
-        return errorResponse(id, ErrorCode.COMMAND_FAILED, "Could not find a Search element for $foregroundPackage")
-    }
-
-    // One reveal-then-click pass. [revealKey] (may be null) fires the app's nav-reveal key
-    // first, then we look for a "Search" node and click it, retrying the click for up to
-    // [clickRetryWindowMs].
-    //
-    // The click is retried rather than attempted once because on Netflix's Jetpack Compose nav
-    // bar (androidx.compose.ui.platform.ComposeView in its ancestor chain per a live
-    // uiautomator dump) the semantics tree can recompose - e.g. the auto-rotating hero
-    // carousel - between the node being found and clicked, invalidating that
-    // AccessibilityNodeInfo snapshot so performAction(ACTION_CLICK) silently fails even though
-    // the node and a clickable ancestor both genuinely exist. clickNodeByText() re-fetches the
-    // node fresh each call, so a retry (not a re-click of a stale reference) is what fixes it.
-    private fun revealAndClickSearch(
-        service: CineAgentAccessibilityService,
-        revealKey: ((CineAgentAccessibilityService) -> Boolean)?,
-        clickRetryWindowMs: Long
-    ): Boolean {
-        revealKey?.let { reveal ->
-            reveal(service)
-            Thread.sleep(SEARCH_REVEAL_DELAY_MS)
-        }
-        if (service.clickNodeByText("Search")) return true
-        val deadline = System.currentTimeMillis() + clickRetryWindowMs
-        while (System.currentTimeMillis() < deadline) {
-            Thread.sleep(SEARCH_CLICK_RETRY_INTERVAL_MS)
-            if (service.clickNodeByText("Search")) return true
-        }
-        return false
+        return errorResponse(id, ErrorCode.UNSUPPORTED_COMMAND, "Search is not supported for $foregroundPackage")
     }
 
     // Keyboard Mode Screen (SEND_TEXT): confirm-to-send only, not per-keystroke - writes the
@@ -1125,9 +966,16 @@ class CommandHandler(private val context: Context) {
         return successResponse(id)
     }
 
+    // Every Settings screen opens into the Settings app's one task. With NEW_TASK alone, asking
+    // for a screen that is already that task's root (e.g. Bluetooth, opened first) only brought
+    // the task forward with whatever was on top of it (Wi-Fi, main Settings...) - so Bluetooth
+    // opened once and never again (confirmed on the E1 via logcat: START, wm_task_moved, no
+    // Displayed). CLEAR_TASK starts the task afresh with exactly the requested screen.
+    private fun settingsIntent(intent: Intent): Intent =
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+
     private fun handleOpenSettings(id: Any?, action: String): JSONObject {
-        val intent = Intent(action).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        context.startActivity(intent)
+        context.startActivity(settingsIntent(Intent(action)))
         return successResponse(id)
     }
 
@@ -1136,14 +984,14 @@ class CommandHandler(private val context: Context) {
      *  action (works on vendors like SigmaStar/zhiying that do register it). */
     private fun handleOpenBluetooth(id: Any?): JSONObject {
         if (DeviceInfoProvider.isF1Family(context)) {
-            val explicit = Intent()
-                .setClassName(F1_FAMILY_BLUETOOTH_PAIRER_PKG, F1_FAMILY_BLUETOOTH_PAIRER_CLASS)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            val explicit = settingsIntent(
+                Intent().setClassName(F1_FAMILY_BLUETOOTH_PAIRER_PKG, F1_FAMILY_BLUETOOTH_PAIRER_CLASS)
+            )
             return if (tryStartActivity(explicit)) successResponse(id)
             else errorResponse(id, ErrorCode.COMMAND_FAILED, "No Bluetooth settings screen available on this device")
         }
 
-        val implicit = Intent(Settings.ACTION_BLUETOOTH_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        val implicit = settingsIntent(Intent(Settings.ACTION_BLUETOOTH_SETTINGS))
         return if (tryStartActivity(implicit)) successResponse(id)
         else errorResponse(id, ErrorCode.COMMAND_FAILED, "No Bluetooth settings screen available on this device")
     }

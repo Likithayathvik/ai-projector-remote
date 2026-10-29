@@ -9,19 +9,14 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -96,27 +91,12 @@ fun RemoteScreen(
 
     var showSettings by remember { mutableStateOf(false) }
     var micError by remember { mutableStateOf<String?>(null) }
-    // The field whose Keyboard Mode prompt the user dismissed with Back. Suppresses only the
-    // *current* focus session: cleared as soon as the projector reports the field gone
-    // (keyboardMode leaves FieldFocused), so the next time a field is focused - even the
-    // identical one, e.g. reopening the same Netflix search box - Keyboard Mode shows again.
-    // Without the reset-on-blur it stayed latched forever against any equal FocusedTextField
-    // value. Only applies to FieldFocused; the timer-driven SearchQuery variant is dismissed
-    // through viewModel.cancelSearchKeyboard() instead.
-    var dismissedTextField by remember { mutableStateOf<FocusedTextField?>(null) }
     val snackbarHostState = remember { SnackbarHostState() }
 
-    LaunchedEffect(keyboardMode) {
-        if (keyboardMode !is KeyboardMode.FieldFocused) dismissedTextField = null
-    }
-
-    // Pressing Search is an explicit "I want to type" - undo any earlier Back on a field that
-    // is still focused on the projector, or Keyboard Mode would never come back for it.
-    val searchRequests by viewModel.searchRequests.collectAsState()
-    LaunchedEffect(searchRequests) { dismissedTextField = null }
-
     LaunchedEffect(connectionState) {
-        if (connectionState is ConnectionState.Disconnected || connectionState is ConnectionState.Lost) {
+        if (connectionState is ConnectionState.Disconnected || connectionState is ConnectionState.Lost ||
+            connectionState is ConnectionState.Busy
+        ) {
             onDisconnected()
         }
     }
@@ -156,15 +136,13 @@ fun RemoteScreen(
     // Compose identifies them by call-site position, not by what runs after them.
     when (val mode = keyboardMode) {
         is KeyboardMode.FieldFocused -> {
-            if (mode.field != dismissedTextField) {
-                KeyboardModeScreen(
-                    field = mode.field,
-                    isSending = isSendingText,
-                    onSend = { text -> viewModel.sendKeyboardText(text) },
-                    onBack = { dismissedTextField = mode.field }
-                )
-                return
-            }
+            KeyboardModeScreen(
+                field = mode.field,
+                isSending = isSendingText,
+                onSend = { text -> viewModel.sendKeyboardText(text) },
+                onBack = { viewModel.cancelSearchKeyboard() }
+            )
+            return
         }
         KeyboardMode.SearchQuery -> {
             KeyboardModeScreen(
@@ -243,8 +221,7 @@ fun RemoteScreen(
                     items(chatMessages) { message ->
                         Text(
                             text = (if (message.isUser) "You: " else "Agent: ") + message.text,
-                            color = if (message.isError) Color(0xFFEF5350)
-                                    else MaterialTheme.colorScheme.onSurface,
+                            color = MaterialTheme.colorScheme.onSurface,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(horizontal = 16.dp, vertical = 4.dp)
@@ -256,7 +233,7 @@ fun RemoteScreen(
         }
     }
 
-    // Popup shown only when the agent requests an unsupported tool/action.
+    // Popup shown only when a chat/voice command isn't a supported action.
     actionPopup?.let { message ->
         AlertDialog(
             onDismissRequest = { viewModel.consumeActionPopup() },
@@ -277,6 +254,27 @@ fun RemoteScreen(
 
     if (showSettings) {
         SettingsDialog(viewModel = viewModel, onDismiss = { showSettings = false })
+    }
+
+    // The connection dropped (usually Android cutting the network while the app was in the
+    // background) and is being brought back - the remote stays put, with presses held off
+    // until it's ready, instead of failing with "Command timed out".
+    if (connectionState is ConnectionState.Reconnecting && !isPoweringOff) {
+        Dialog(
+            onDismissRequest = {},
+            properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false)
+        ) {
+            Column(
+                modifier = Modifier
+                    .background(RemoteBlack, RoundedCornerShape(20.dp))
+                    .padding(32.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                CircularProgressIndicator(color = Color.White)
+                Text("Reconnecting…", color = Color.White, style = MaterialTheme.typography.titleMedium)
+            }
+        }
     }
 
     // Shown for the few seconds between sending POWER and the app disconnecting - the
@@ -304,12 +302,10 @@ fun RemoteScreen(
 @Composable
 private fun SettingsDialog(viewModel: RemoteViewModel, onDismiss: () -> Unit) {
     val packages = remember { viewModel.getAppPackageSettings() }
-    var serverUrl by remember { mutableStateOf(packages.serverUrl) }
     var netflix by remember { mutableStateOf(packages.netflix) }
     var youtube by remember { mutableStateOf(packages.youtube) }
     var prime by remember { mutableStateOf(packages.primeVideo) }
     var hotstar by remember { mutableStateOf(packages.hotstar) }
-    var usbCommand by remember { mutableStateOf(packages.usbSourceCommand) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -321,17 +317,6 @@ private fun SettingsDialog(viewModel: RemoteViewModel, onDismiss: () -> Unit) {
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                // Voice Agent Server URL — most important setting
-                Text("Voice Agent Server", style = MaterialTheme.typography.titleMedium)
-                OutlinedTextField(
-                    value = serverUrl,
-                    onValueChange = { serverUrl = it },
-                    label = { Text("Server URL (ws://IP:8765)") },
-                    placeholder = { Text("ws://34.xxx.xxx.xxx:8765") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                HorizontalDivider()
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text("App package names", style = MaterialTheme.typography.titleMedium)
                     Text(
@@ -359,11 +344,6 @@ private fun SettingsDialog(viewModel: RemoteViewModel, onDismiss: () -> Unit) {
                     label = { Text("Hotstar package") }, singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
-                OutlinedTextField(
-                    value = usbCommand, onValueChange = { usbCommand = it },
-                    label = { Text("USB source ADB command") }, singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
                 HorizontalDivider()
                 Text(
                     "App version ${BuildConfig.VERSION_NAME}",
@@ -379,8 +359,6 @@ private fun SettingsDialog(viewModel: RemoteViewModel, onDismiss: () -> Unit) {
                         youtube = youtube,
                         primeVideo = prime,
                         hotstar = hotstar,
-                        usbSourceCommand = usbCommand,
-                        serverUrl = serverUrl,
                     )
                 )
                 onDismiss()

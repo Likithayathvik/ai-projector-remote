@@ -2,6 +2,8 @@ package com.boat.cineagent.net
 
 import android.content.Context
 import android.util.Log
+import com.boat.cineagent.auth.AuthRateLimiter
+import com.boat.cineagent.auth.SessionStore
 import com.boat.cineagent.commands.CommandHandler
 import com.boat.cineagent.util.DeviceInfoProvider
 import org.json.JSONArray
@@ -14,11 +16,17 @@ import kotlin.concurrent.thread
 
 // UDP discovery listener (spec section 3): answers DISCOVER_CINEAGENT
 // broadcasts directly to the sender with a DISCOVERY_RESPONSE.
+// Authenticated connection: a request must carry the shared discovery key (Key #1) and the
+// phone's clientId. Anything else is dropped silently, so the projector stays invisible to
+// clients without the key. A valid request gets a fresh session (Key #2) for that phone.
 class UdpDiscoveryServer(
     private val udpPort: Int,
     private val tcpPort: Int,
-    private val context: Context
+    private val context: Context,
+    private val sessionStore: SessionStore
 ) {
+    private val rateLimiter = AuthRateLimiter()
+
     companion object {
         private const val TAG = "UdpDiscoveryServer"
         private const val REQUEST_TYPE = "DISCOVER_CINEAGENT"
@@ -76,6 +84,19 @@ class UdpDiscoveryServer(
         }
         if (request.optString("type") != REQUEST_TYPE) return
 
+        val sender = packet.address?.hostAddress ?: return
+        if (rateLimiter.isBlocked(sender)) return
+        val clientId = request.optString("clientId")
+        if (!SessionStore.isValidDiscoveryKey(request.optString("key", null)) ||
+            clientId.isBlank() || clientId.length > SessionStore.MAX_CLIENT_ID_LENGTH
+        ) {
+            rateLimiter.recordFailure(sender)
+            Log.w(TAG, "Rejected discovery from $sender: invalid key or clientId")
+            return
+        }
+        rateLimiter.recordSuccess(sender)
+        val session = sessionStore.issue(clientId)
+
         val response = JSONObject().apply {
             put("type", "DISCOVERY_RESPONSE")
             put("deviceName", DeviceInfoProvider.deviceName(context))
@@ -87,6 +108,8 @@ class UdpDiscoveryServer(
             put("agentVersion", DeviceInfoProvider.agentVersion())
             put("protocolVersion", DeviceInfoProvider.protocolVersion())
             put("capabilities", JSONArray(CommandHandler.CAPABILITIES))
+            put("sessionId", session.sessionId)
+            put("sessionKey", session.sessionKey)
         }
 
         val payload = response.toString().toByteArray(Charsets.UTF_8)

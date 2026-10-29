@@ -1,10 +1,13 @@
 package com.boat.cineagent
 
+import android.Manifest
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import com.boat.cineagent.databinding.ActivityMainBinding
 
@@ -12,6 +15,9 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
     private val refreshHandler = Handler(Looper.getMainLooper())
+
+    private val permissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { }
 
     private val refreshRunnable = object : Runnable {
         override fun run() {
@@ -25,8 +31,7 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        // Platform-signed path: self-enable the notification listener with no user interaction.
-        NotificationListenerGuard.ensureEnabled(this)
+        requestRuntimePermissions()
 
         binding.btnToggleService.setOnClickListener {
             if (CineAgentService.isRunning) {
@@ -56,13 +61,25 @@ class MainActivity : AppCompatActivity() {
         refreshHandler.removeCallbacks(refreshRunnable)
     }
 
+    private fun requestRuntimePermissions() {
+        val permissions = mutableListOf<String>()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            permissions.add(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            permissions.add(Manifest.permission.BLUETOOTH_CONNECT)
+        }
+        if (permissions.isNotEmpty()) {
+            permissionLauncher.launch(permissions.toTypedArray())
+        }
+    }
+
     private fun refreshStatus() {
         // Re-asserted on every tick, not just once at launch: writing the setting correctly
         // doesn't guarantee the OS has actually bound the service yet (it can lag well behind
         // the write, especially soon after a reboot), so this keeps nudging for as long as the
         // app stays open instead of gambling on a single attempt at onCreate.
         AccessibilityServiceGuard.ensureEnabled(this)
-        NotificationListenerGuard.ensureEnabled(this)
 
         val running = CineAgentService.isRunning
         binding.statusText.text = if (running) getString(R.string.status_running) else getString(R.string.status_stopped)

@@ -81,24 +81,6 @@ public final class CommandRouter {
             this.query = slots.get("query") instanceof String ? (String) slots.get("query") : null;
             this.app = slots.get("app") instanceof String ? (String) slots.get("app") : null;
         }
-
-        public String displayText() {
-            StringBuilder text = new StringBuilder();
-            text.append("ID: ").append(id).append("\nCOMMAND: ").append(command);
-            if (value != null) text.append("\nVALUE: ").append(value);
-            if (app != null) text.append("\nAPP: ").append(app);
-            if (platform != null) text.append("\nPLATFORM: ").append(platform);
-            if (query != null) text.append("\nQUERY: ").append(query);
-            if (!actions.isEmpty()) {
-                text.append("\nACTIONS:");
-                for (int i = 0; i < actions.size(); i++) {
-                    Action action = actions.get(i);
-                    text.append("\n").append(i + 1).append(". ").append(action.type);
-                    if (action.target != null) text.append(" -> ").append(action.target);
-                }
-            }
-            return text.toString();
-        }
     }
 
     private static final class Token {
@@ -147,11 +129,6 @@ public final class CommandRouter {
             if (app != null) return openAppResult(app);
         }
         return noMatch();
-    }
-
-    static String debugClassification(String input) {
-        Classification classification = classify(words(tokenize(input)));
-        return RouterModel.LABELS[classification.intent] + ":" + classification.margin;
     }
 
     private static Result noMatch() {

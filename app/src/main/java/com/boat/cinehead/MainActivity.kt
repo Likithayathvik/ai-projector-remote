@@ -14,7 +14,6 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
-import com.boat.cinehead.net.CineAgentDiscovery
 import com.boat.cinehead.net.ConnectionState
 import com.boat.cinehead.ui.discovery.DiscoveryScreen
 import com.boat.cinehead.ui.discovery.DiscoveryViewModel
@@ -40,7 +39,7 @@ class MainActivity : ComponentActivity() {
                                 factory = viewModelFactory {
                                     initializer {
                                         DiscoveryViewModel(
-                                            CineAgentDiscovery(),
+                                            app.discovery,
                                             app.connectionManager,
                                             app.lastConnectedStore
                                         )
@@ -57,7 +56,6 @@ class MainActivity : ComponentActivity() {
                             val viewModel: RemoteViewModel = viewModel(
                                 factory = viewModelFactory {
                                     initializer {
-                                        // No ApiKeyStore needed — uses VoiceAgentClient (WebSocket)
                                         RemoteViewModel(app.connectionManager, app.appSettingsStore)
                                     }
                                 }
@@ -92,11 +90,16 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         val app = application as AiProjectorRemoteApp
-        if (app.connectionManager.state.value is ConnectionState.Connected) return
+        // Reconnecting: the connection manager is already bringing a dropped connection back
+        // (it waits for exactly this moment); starting a second connect would cut it off.
+        when (app.connectionManager.state.value) {
+            is ConnectionState.Connected, ConnectionState.Reconnecting, ConnectionState.Connecting -> return
+            else -> {}
+        }
         val saved = app.lastConnectedStore.lastConnected ?: return
         if (!app.autoReconnectGate.tryConsume()) return
         lifecycleScope.launch {
-            app.connectionManager.connectRetryingUntilWifiReady(saved.ipAddress, saved.tcpPort)
+            app.connectionManager.connectRetryingUntilWifiReady(saved)
         }
     }
 }

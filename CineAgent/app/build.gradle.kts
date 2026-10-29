@@ -10,8 +10,8 @@ android {
         applicationId = "com.boat.cineagent"
         minSdk = 26
         targetSdk = 36
-        versionCode = 14
-        versionName = "1.1.7"
+        versionCode = 17
+        versionName = "1.1.8"
 
         buildConfigField("int", "UDP_DISCOVERY_PORT", "50000")
         buildConfigField("int", "TCP_COMMAND_PORT", "50001")
@@ -40,6 +40,5 @@ android {
 dependencies {
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.appcompat:appcompat:1.7.0")
-    implementation("androidx.activity:activity-ktx:1.9.3")
     implementation("com.google.android.material:material:1.12.0")
 }

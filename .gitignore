@@ -23,3 +23,14 @@ Thumbs.db
 
 # Editor / session tooling
 /.claude/
+
+# Signing keys - never commit (the E1 platform key lives only in repo secrets)
+keys/
+*.pk8
+*.pem
+*.jks
+*.keystore
+
+# adb is downloaded by CI into the install bundle, not committed
+install/*.exe
+install/*.dll

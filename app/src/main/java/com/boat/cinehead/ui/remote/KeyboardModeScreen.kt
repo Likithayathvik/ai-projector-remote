@@ -6,7 +6,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -50,13 +49,11 @@ import androidx.core.content.ContextCompat
 import com.boat.cinehead.net.FocusedTextField
 
 /**
- * Appears automatically whenever CineAgent reports an editable field focused on the projector
- * (search, login, password) and disappears when it reports focus lost - the caller (RemoteScreen)
- * drives this purely by observing the connection's focusedTextField, no separate open/close call.
+ * Shown only after the phone's Search button opened a search screen on the projector - never
+ * just because a field (login, password) got focused there. The caller (RemoteScreen) drives it
+ * from RemoteViewModel.keyboardMode, and Back closes it until Search is pressed again.
  * A real full-screen destination rather than a Dialog overlay - takes over the whole screen, with
- * its own back action, instead of popping up on top of the remote controls. The caller resets the
- * dismissal once a *different* field gets focused, so leaving this screen for one field doesn't
- * suppress the next one.
+ * its own back action, instead of popping up on top of the remote controls.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

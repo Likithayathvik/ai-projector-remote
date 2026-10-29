@@ -1,47 +1,36 @@
-# Builds both apps on every push / pull request and keeps the APKs as run artifacts:
-#   boAtCineHead  - the phone app (repo root)
-#   CineAgent     - the projector agent (CineAgent/)
-# Pushing a tag like v1.4 or cineagent-v1.1.7 also publishes a GitHub Release with the APKs attached.
+# Builds the three apps on every push / pull request and keeps them as run artifacts
+# (Actions -> run -> Artifacts):
 #
-# The debug APKs are signed with this runner's debug key, so they cannot update an app installed
-# from a build made on another PC (Android refuses a different signature): uninstall first, or use
-# install-projector.bat, which offers to. The debug CineAgent still needs the installer's adb
-# permission grants.
+#   CineHead 1.5            phone app ("AI Projector Remote")   repo root      ALL projectors
+#   CineAgent 1.1.8 normal  projector agent                     CineAgent/     ALL projectors (E1 too)
+#   CineAgent 1.1.8 E1      projector agent, platform-signed    CineAgent-E1/  E1 / E1 Pro ONLY
 #
-# CineAgent is also signed with a projector's platform key, when that key is available as repo
-# secrets. A platform key belongs to ONE firmware, so each signed APK is named after its model and
-# only installs with full permissions on that model:
-#   E1 Pro  - secrets E1PRO_PLATFORM_PK8 + E1PRO_PLATFORM_X509_PEM (base64 of platform.pk8 and
-#             platform.x509.pem) -> CineAgent-<version>-e1pro-platform-signed.apk
-# Without those secrets (e.g. on pull requests from forks) the signing step is skipped and only the
-# debug APK is built. Another model gets its own pair of secrets and a copy of the signing step.
+# The normal CineAgent is debug-signed and is installed with install/install-projector.bat, which
+# opens it once and grants its permissions over adb. CI packs the .bat, the APK and adb (from
+# Google's platform-tools) into CineAgent-<version>-install.zip - unzip it and run the .bat.
+#
+# The E1 CineAgent is signed with the E1 firmware's platform key, so it installs with a single
+# `adb install` and gets its permissions automatically - on the E1 only. The key is never in the
+# repo: it comes from the secrets E1PRO_PLATFORM_PK8 and E1PRO_PLATFORM_X509_PEM (base64 of
+# platform.pk8 and platform.x509.pem), lives in a temp folder for the signing step only, and is
+# deleted right after. Without the secrets that one job fails on purpose; the other two still build.
+#
+# Debug-signed APKs from CI carry this runner's debug key, not the key of a PC build, so they
+# cannot update an app installed from a PC build in place: uninstall first (install-projector.bat
+# offers to). Pushing a tag (release-*, v*, cineagent-v*) publishes a GitHub Release with all of them.
 name: Build APKs
 
 on:
   push:
-    branches: [main, "boatcinehead-*", "cineagent-*"]
-    tags: ["v*", "cineagent-v*"]
+    branches: [main, "boatcinehead-*", "cineagent-*", "release/*"]
+    tags: ["v*", "cineagent-v*", "release-*"]
   pull_request:
   workflow_dispatch:
 
 jobs:
-  build:
-    name: Build ${{ matrix.app }}
+  cinehead:
+    name: CineHead (phone, all projectors)
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - app: boAtCineHead
-            dir: .
-          - app: CineAgent
-            dir: CineAgent
-    defaults:
-      run:
-        working-directory: ${{ matrix.dir }}
-    env:
-      E1PRO_PLATFORM_PK8: ${{ secrets.E1PRO_PLATFORM_PK8 }}
-      E1PRO_PLATFORM_X509_PEM: ${{ secrets.E1PRO_PLATFORM_X509_PEM }}
     steps:
       - uses: actions/checkout@v4
 
@@ -61,10 +50,9 @@ jobs:
         id: apk
         run: |
           version=$(grep -o '"versionName": *"[^"]*"' app/build/outputs/apk/debug/output-metadata.json | sed 's/.*"\([^"]*\)"$/\1/')
-          name="${{ matrix.app }}-${version}-debug.apk"
-          mkdir -p "$GITHUB_WORKSPACE/out"
-          cp app/build/outputs/apk/debug/app-debug.apk "$GITHUB_WORKSPACE/out/$name"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
+          name="CineHead-${version}-E1-keyauth.apk"
+          mkdir -p out
+          cp app/build/outputs/apk/debug/app-debug.apk "out/$name"
           echo "name=$name" >> "$GITHUB_OUTPUT"
           echo "Built $name"
 
@@ -74,48 +62,137 @@ jobs:
           path: out/${{ steps.apk.outputs.name }}
           if-no-files-found: error
 
+  cineagent-normal:
+    name: CineAgent normal (all projectors) + installer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Assemble debug APK
+        working-directory: CineAgent
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:assembleDebug --no-daemon --stacktrace
+
+      # The installer finds the APK by name, so the bundle fails the build if the name the .bat
+      # expects and the APK just built ever drift apart.
+      - name: Build the install bundle (.bat + APK + adb)
+        id: apk
+        run: |
+          version=$(grep -o '"versionName": *"[^"]*"' CineAgent/app/build/outputs/apk/debug/output-metadata.json | sed 's/.*"\([^"]*\)"$/\1/')
+          name="CineAgent-${version}-debug-signed.apk"
+          grep -q "set \"APK=%~dp0${name}\"" install/install-projector.bat || {
+            echo "::error::install/install-projector.bat does not point at ${name} - update its APK name."
+            exit 1
+          }
+          mkdir -p out/install
+          cp CineAgent/app/build/outputs/apk/debug/app-debug.apk "out/$name"
+          cp "out/$name" install/install-projector.bat out/install/
+          curl -sSfL -o pt.zip https://dl.google.com/android/repository/platform-tools-latest-windows.zip
+          unzip -q -j pt.zip 'platform-tools/adb.exe' 'platform-tools/AdbWinApi.dll' 'platform-tools/AdbWinUsbApi.dll' 'platform-tools/libwinpthread-1.dll' -d out/install
+          zipname="CineAgent-${version}-install.zip"
+          (cd out && zip -q -r "$zipname" install)
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "zip=$zipname" >> "$GITHUB_OUTPUT"
+          echo "Built $name and $zipname"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.apk.outputs.name }}
+          path: out/${{ steps.apk.outputs.name }}
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.apk.outputs.zip }}
+          path: out/${{ steps.apk.outputs.zip }}
+          if-no-files-found: error
+
+  cineagent-e1:
+    name: CineAgent E1 signed (E1 / E1 Pro only)
+    runs-on: ubuntu-latest
+    env:
+      E1PRO_PLATFORM_PK8: ${{ secrets.E1PRO_PLATFORM_PK8 }}
+      E1PRO_PLATFORM_X509_PEM: ${{ secrets.E1PRO_PLATFORM_X509_PEM }}
+    steps:
+      - name: Check the E1 platform key secrets are set
+        run: |
+          if [ -z "$E1PRO_PLATFORM_PK8" ] || [ -z "$E1PRO_PLATFORM_X509_PEM" ]; then
+            echo "::error::E1PRO_PLATFORM_PK8 / E1PRO_PLATFORM_X509_PEM secrets are not set. The E1 build must be signed with the E1 platform key."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Assemble release APK (unsigned)
+        working-directory: CineAgent-E1
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:assembleRelease --no-daemon --stacktrace
+
       # zipalign before apksigner (v2+ signatures cover the aligned bytes). The key files exist only
       # for this step and are deleted at the end, whatever happens.
-      - name: Platform-sign CineAgent for E1 Pro
-        id: e1pro
-        if: matrix.app == 'CineAgent' && env.E1PRO_PLATFORM_PK8 != '' && env.E1PRO_PLATFORM_X509_PEM != ''
+      - name: Platform-sign for E1
+        id: apk
         run: |
+          meta=CineAgent-E1/app/build/outputs/apk/release
+          version=$(grep -o '"versionName": *"[^"]*"' $meta/output-metadata.json | sed 's/.*"\([^"]*\)"$/\1/')
+          name="CineAgent-${version}-E1-platform-signed.apk"
           bt=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
-          keydir="$RUNNER_TEMP/e1pro-key"
-          mkdir -p "$keydir"
+          keydir="$RUNNER_TEMP/e1-key"
+          mkdir -p "$keydir" out
           trap 'rm -rf "$keydir"' EXIT
           printf '%s' "$E1PRO_PLATFORM_PK8" | base64 -d > "$keydir/platform.pk8"
           printf '%s' "$E1PRO_PLATFORM_X509_PEM" | base64 -d > "$keydir/platform.x509.pem"
-          name="CineAgent-${{ steps.apk.outputs.version }}-e1pro-platform-signed.apk"
-          "$bt/zipalign" -f -p 4 app/build/outputs/apk/debug/app-debug.apk "$keydir/aligned.apk"
+          "$bt/zipalign" -f -p 4 $meta/app-release-unsigned.apk "$keydir/aligned.apk"
           "$bt/apksigner" sign --key "$keydir/platform.pk8" --cert "$keydir/platform.x509.pem" \
-            --out "$GITHUB_WORKSPACE/out/$name" "$keydir/aligned.apk"
-          "$bt/apksigner" verify --print-certs "$GITHUB_WORKSPACE/out/$name" | grep -E "DN|SHA-1"
-          rm -f "$GITHUB_WORKSPACE/out/$name.idsig"
+            --v4-signing-enabled false --out "out/$name" "$keydir/aligned.apk"
+          "$bt/apksigner" verify --print-certs "out/$name" | grep -E "DN|SHA-256"
           echo "name=$name" >> "$GITHUB_OUTPUT"
-          echo "Signed $name"
+          echo "Signed $name (E1 only)"
 
       - uses: actions/upload-artifact@v4
-        if: steps.e1pro.outcome == 'success'
         with:
-          name: ${{ steps.e1pro.outputs.name }}
-          path: out/${{ steps.e1pro.outputs.name }}
+          name: ${{ steps.apk.outputs.name }}
+          path: out/${{ steps.apk.outputs.name }}
           if-no-files-found: error
 
   release:
     name: Publish release
-    if: startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/cineagent-v')
-    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [cinehead, cineagent-normal, cineagent-e1]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
-          path: apks
+          path: assets
           merge-multiple: true
 
       - uses: softprops/action-gh-release@v2
         with:
-          files: apks/*.apk
+          files: |
+            assets/*.apk
+            assets/*.zip
+          body: |
+            | File | For |
+            |---|---|
+            | `CineHead-*.apk` | phone app - all projectors |
+            | `CineAgent-*-install.zip` | normal CineAgent + installer - all projectors (E1 too): unzip, run `install-projector.bat` |
+            | `CineAgent-*-E1-platform-signed.apk` | E1 / E1 Pro only - one `adb install`, sets itself up |
           generate_release_notes: true

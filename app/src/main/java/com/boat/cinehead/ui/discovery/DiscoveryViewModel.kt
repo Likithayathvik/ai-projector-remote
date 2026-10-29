@@ -61,33 +61,28 @@ class DiscoveryViewModel(
         }
     }
 
+    // The connection manager saves the projector and its Key #2 itself on success; these just
+    // refresh what the screen shows from the store afterwards.
     fun connect(projector: DiscoveredProjector) {
         viewModelScope.launch {
-            connectionManager.connect(projector.ipAddress, projector.tcpPort)
-            if (connectionManager.state.value is ConnectionState.Connected) {
-                saveLastConnected(
-                    LastConnectedProjector(projector.deviceName, projector.ipAddress, projector.tcpPort)
-                )
-            }
+            connectionManager.connect(projector.ipAddress, projector.tcpPort, projector.deviceName, projector.credentials)
+            _lastConnected.value = lastConnectedStore.lastConnected
         }
     }
 
+    /** No Key #2 yet for a typed-in address: the manager runs a unicast discovery to it first,
+     *  which also works on Wi-Fi that drops broadcast. */
+    fun dismissBusy() = connectionManager.dismissBusy()
+
     fun connectManual(ip: String) {
         viewModelScope.launch {
-            connectionManager.connect(ip, CineAgentDiscovery.DEFAULT_TCP_PORT)
-            if (connectionManager.state.value is ConnectionState.Connected) {
-                saveLastConnected(LastConnectedProjector("Manual entry", ip, CineAgentDiscovery.DEFAULT_TCP_PORT))
-            }
+            connectionManager.connect(ip, CineAgentDiscovery.DEFAULT_TCP_PORT, "Manual entry", credentials = null)
+            _lastConnected.value = lastConnectedStore.lastConnected
         }
     }
 
     fun forgetLastConnected() {
         lastConnectedStore.forget()
         _lastConnected.value = null
-    }
-
-    private fun saveLastConnected(projector: LastConnectedProjector) {
-        lastConnectedStore.lastConnected = projector
-        _lastConnected.value = projector
     }
 }

@@ -40,7 +40,20 @@ class CineAgentConnection private constructor(
     @Volatile
     var onEvent: ((JSONObject) -> Unit)? = null
 
-    val isConnected: Boolean get() = !socket.isClosed && socket.isConnected
+    /** Called once when the connection ends on its own - the projector closed it, or the phone
+     *  destroyed the socket (Android cuts a backgrounded app's network). Not called for [close]. */
+    @Volatile
+    var onClosed: (() -> Unit)? = null
+
+    @Volatile
+    private var closedByUs = false
+
+    @Volatile
+    private var readerEnded = false
+
+    /** False as soon as the read side has ended - Socket.isConnected stays true after the peer or
+     *  the OS drops the connection, so it can't tell a dead socket from a live one by itself. */
+    val isConnected: Boolean get() = !readerEnded && !socket.isClosed && socket.isConnected
 
     init {
         readerJob = scope.launch { readLoop() }
@@ -80,6 +93,7 @@ class CineAgentConnection private constructor(
     }
 
     fun close() {
+        closedByUs = true
         readerJob?.cancel()
         pending.values.forEach { it.cancel() }
         pending.clear()
@@ -106,12 +120,13 @@ class CineAgentConnection private constructor(
                 }
             }
         } catch (e: Exception) {
-            // Socket closed or read error - pending callers time out naturally.
-            Log.w(TAG, "readLoop ended with exception", e)
+            if (!closedByUs) Log.w(TAG, "readLoop ended with exception", e)
         } finally {
-            Log.w(TAG, "readLoop exiting - ${pending.size} pending request(s) will time out")
+            readerEnded = true
+            Log.w(TAG, "readLoop exiting - ${pending.size} pending request(s) cancelled")
             pending.values.forEach { it.cancel() }
             pending.clear()
+            if (!closedByUs) onClosed?.invoke()
         }
     }
 
@@ -123,7 +138,11 @@ class CineAgentConnection private constructor(
     companion object {
         private const val TAG = "CineAgentConnection"
         private const val CONNECT_TIMEOUT_MS = 3000
-        private const val TIMEOUT_MS = 5000L
+        /** How long a command waits for its reply before "Command timed out". */
+        private const val TIMEOUT_MS = 10_000L
+        /** Heartbeat PINGs keep the shorter wait, so a dead connection is still noticed as
+         *  quickly as before; CineAgent answers PING at once, never behind other commands. */
+        const val PING_TIMEOUT_MS = 5000L
 
         suspend fun connect(host: String, port: Int): Result<CineAgentConnection> =
             withContext(Dispatchers.IO) {

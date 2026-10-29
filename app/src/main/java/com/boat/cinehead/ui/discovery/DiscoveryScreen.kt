@@ -130,6 +130,20 @@ fun DiscoveryScreen(
         }
     }
 
+    (connectionState as? ConnectionState.Busy)?.let { busy ->
+        AlertDialog(
+            onDismissRequest = { viewModel.dismissBusy() },
+            title = { Text("Projector already connected") },
+            text = {
+                Text(
+                    "${busy.deviceName.ifBlank { "This projector" }} is already connected to another phone. " +
+                        "Disconnect it on that phone first, then try again."
+                )
+            },
+            confirmButton = { TextButton(onClick = { viewModel.dismissBusy() }) { Text("OK") } }
+        )
+    }
+
     if (showSettings) {
         AlertDialog(
             onDismissRequest = { showSettings = false },

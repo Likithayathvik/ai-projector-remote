@@ -2,7 +2,6 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
-    alias(libs.plugins.google.services)
 }
 
 android {
@@ -13,8 +12,8 @@ android {
         applicationId = "com.boat.cinehead"
         minSdk = 26
         targetSdk = 36
-        versionCode = 6
-        versionName = "1.4"
+        versionCode = 7
+        versionName = "1.5"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -56,11 +55,7 @@ dependencies {
     implementation(libs.androidx.compose.material.icons.extended)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.navigation.compose)
-    implementation(libs.androidx.security.crypto)
-    implementation(libs.okhttp)
     implementation(libs.kotlinx.coroutines.android)
-    implementation(platform(libs.firebase.bom))
-    implementation(libs.firebase.database.ktx)
     implementation(libs.androidx.lifecycle.process)
 
     testImplementation(libs.junit)
